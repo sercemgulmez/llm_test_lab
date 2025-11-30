@@ -24,14 +24,22 @@ from collections import defaultdict
 import requests
 import yaml
 from dotenv import load_dotenv
-from openai import OpenAI
-from google import genai
 
+# ==== DIŞ BAĞIMLILIKLAR İÇİN GÜVENLİ IMPORT ====
+
+try:
+    from openai import OpenAI  # type: ignore
+except ImportError:
+    OpenAI = None  # type: ignore
+
+try:
+    from google import genai  # type: ignore
+except ImportError:
+    genai = None  # type: ignore
 
 # ================== AYARLAR ==================
 
 # OpenAI (GPT) için kullanılacak modeller
-# İstersen bu listeyi ihtiyaçlarına göre düzenleyebilirsin.
 OPENAI_MODELS = [
     "gpt-4.1-mini",
     "gpt-4.1",
@@ -232,6 +240,10 @@ def generate_llm_cases_openai(
     num_cases: int,
 ) -> List[Dict]:
     """OpenAI modelleri ile test senaryosu üretir."""
+    if OpenAI is None:
+        print("UYARI: 'openai' paketi yüklü değil, OpenAI (GPT) üretimi atlandı.")
+        return []
+
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         print("UYARI: OPENAI_API_KEY tanımlı değil, OpenAI üretimi atlandı.")
@@ -253,8 +265,8 @@ def generate_llm_cases_openai(
                 model=model,
                 input=prompt,
             )
-            # Resmi OpenAI Python SDK'da önerilen yol: output_text kullanmak
-            text = resp.output_text or ""
+            # OpenAI Python SDK 1.x için kısa yol
+            text = getattr(resp, "output_text", "") or ""
         except Exception as e:
             print("OpenAI cevabı okunamadı:", e)
             continue
@@ -277,12 +289,21 @@ def generate_llm_cases_gemini(
     num_cases: int,
 ) -> List[Dict]:
     """Google Gemini modelleri ile test senaryosu üretir."""
+    if genai is None:
+        print("UYARI: 'google-genai' paketi yüklü değil, Gemini üretimi atlandı.")
+        return []
+
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         print("UYARI: GEMINI_API_KEY tanımlı değil, Gemini üretimi atlandı.")
         return []
 
-    client = genai.Client(api_key=api_key)
+    try:
+        client = genai.Client(api_key=api_key)
+    except Exception as e:
+        print("Gemini client oluşturulamadı:", e)
+        return []
+
     num_cases = min(num_cases, MAX_CASES_PER_OPERATION)
     rows: List[Dict] = []
 
@@ -298,7 +319,7 @@ def generate_llm_cases_gemini(
                 model=model,
                 contents=prompt,
             )
-            text = resp.text or ""
+            text = getattr(resp, "text", "") or ""
         except Exception as e:
             print("Gemini cevabı okunamadı:", e)
             continue
