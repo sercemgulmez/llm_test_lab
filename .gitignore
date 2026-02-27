@@ -1,0 +1,24 @@
+# Ortam değişkenleri (API anahtarları burada)
+.env
+
+# Python sanal ortamlar
+venv/
+.venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Çıktı dosyaları
+outputs/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
