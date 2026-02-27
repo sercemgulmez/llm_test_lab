@@ -11,6 +11,10 @@ from config import MAX_CASES_PER_OPERATION, RETRY_MAX_ATTEMPTS, RETRY_BACKOFF_SE
 
 def build_llm_prompt(op: ApiOperation, num_cases: int, variant_name: str, variant_desc: str) -> str:
     """Bir API operasyonu için LLM'e gönderilecek prompt'u hazırlar."""
+    example_body_section = (
+        f"\nÖrnek Request Body:\n{op.example_body}\n"
+        if op.example_body else ""
+    )
     return f"""
 Kıdemli bir Backend QA mühendisi gibi davran.
 Aşağıdaki API operasyonu için fonksiyonel test senaryoları üret.
@@ -19,8 +23,7 @@ Operasyon ID: {op.op_id}
 HTTP Method: {op.method}
 Path: {op.path}
 Özet: {op.summary}
-Açıklama: {op.description}
-
+Açıklama: {op.description}{example_body_section}
 Test stratejisi (varyant):
 - {variant_name}: {variant_desc}
 

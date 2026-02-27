@@ -21,14 +21,18 @@ def run_testcases(
     base_url: str,
     rows: List[Dict],
     auth_token: Optional[str] = None,
+    extra_headers: Optional[Dict] = None,
+    cookies: Optional[Dict] = None,
 ) -> List[Dict]:
     """
     Üretilen tüm test senaryolarını gerçek API'ye karşı uygular.
 
     Args:
-        base_url:    Hedef API'nin base URL'i (örn: https://api.example.com/v1)
-        rows:        generate_* fonksiyonlarından gelen test satırları
-        auth_token:  Varsa Bearer token (Authorization: Bearer <token>)
+        base_url:      Hedef API'nin base URL'i (örn: https://api.example.com/v1)
+        rows:          generate_* fonksiyonlarından gelen test satırları
+        auth_token:    Varsa Bearer token (Authorization: Bearer <token>)
+        extra_headers: Ekstra HTTP header dict'i (örn: {"App-Channel-Type": "WEB"})
+        cookies:       Cookie dict'i (örn: {"session": "abc123"})
 
     Returns:
         Her satıra 'url', 'actual_status', 'pass' alanları eklenmiş liste
@@ -38,6 +42,12 @@ def run_testcases(
 
     if auth_token:
         session.headers.update({"Authorization": f"Bearer {auth_token}"})
+
+    if extra_headers:
+        session.headers.update(extra_headers)
+
+    if cookies:
+        session.cookies.update(cookies)
 
     executed: List[Dict] = []
 

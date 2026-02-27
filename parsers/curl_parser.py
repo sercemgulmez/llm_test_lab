@@ -1,0 +1,172 @@
+"""curl komutlarını parse ederek ApiOperation ve request metadata'sını üretir."""
+
+import json
+import re
+import shlex
+from typing import Dict, List, Tuple
+from urllib.parse import urlparse
+
+from models import ApiOperation
+
+# Teste katkı sağlamayan rutin header'lar
+_SKIP_HEADERS = {
+    "accept", "accept-language", "connection", "content-type",
+    "user-agent", "sec-fetch-dest", "sec-fetch-mode", "sec-fetch-site",
+    "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform",
+    "origin", "referer",
+}
+
+
+def parse_curl(curl_text: str) -> Tuple[ApiOperation, str, Dict[str, str], Dict[str, str]]:
+    """
+    curl komutunu parse eder.
+
+    Args:
+        curl_text: Tek veya çok satırlı ham curl komutu.
+
+    Returns:
+        (operation, base_url, headers, cookies)
+        - operation : ApiOperation (example_body ve description dolu)
+        - base_url  : "https://host" şeklinde
+        - headers   : İstek için gerekli ekstra header dict'i
+        - cookies   : Cookie dict'i
+    """
+    # Satır devamlarını temizle
+    curl_text = curl_text.replace("\\\r\n", " ").replace("\\\n", " ")
+
+    try:
+        tokens = shlex.split(curl_text)
+    except ValueError:
+        # Hatalı quoting varsa boşlukla böl (son çare)
+        tokens = curl_text.split()
+
+    url = ""
+    method = None
+    headers: Dict[str, str] = {}
+    cookies: Dict[str, str] = {}
+    body = None
+
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+
+        if tok == "curl":
+            i += 1
+            continue
+
+        # URL: - ile başlamayan ve http(s) ile başlayan token
+        if not tok.startswith("-") and not url and tok.startswith("http"):
+            url = tok.strip("'\"")
+            i += 1
+            continue
+
+        if tok in ("-H", "--header") and i + 1 < len(tokens):
+            raw = tokens[i + 1]
+            key, _, value = raw.partition(": ")
+            key = key.strip()
+            if key.lower() == "cookie":
+                _parse_cookie_string(value, cookies)
+            else:
+                headers[key] = value.strip()
+            i += 2
+            continue
+
+        if tok in ("-b", "--cookie") and i + 1 < len(tokens):
+            _parse_cookie_string(tokens[i + 1], cookies)
+            i += 2
+            continue
+
+        if tok in ("-X", "--request") and i + 1 < len(tokens):
+            method = tokens[i + 1].upper()
+            i += 2
+            continue
+
+        if tok in ("-d", "--data", "--data-raw", "--data-binary") and i + 1 < len(tokens):
+            body = tokens[i + 1]
+            i += 2
+            continue
+
+        i += 1
+
+    if not url:
+        raise ValueError("curl komutunda geçerli bir URL bulunamadı.")
+
+    if not method:
+        method = "POST" if body else "GET"
+
+    parsed_url = urlparse(url)
+    base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+    path = parsed_url.path or "/"
+    if parsed_url.query:
+        path += f"?{parsed_url.query}"
+
+    # Body'yi formatla
+    example_body_str = ""
+    if body:
+        try:
+            example_body_str = json.dumps(json.loads(body), ensure_ascii=False, indent=2)
+        except (json.JSONDecodeError, ValueError):
+            example_body_str = body
+
+    # Önemli (non-rutin) header'ları description'a ekle
+    notable = {k: v for k, v in headers.items() if k.lower() not in _SKIP_HEADERS}
+    desc_parts = []
+    if notable:
+        desc_parts.append(
+            "Gerekli header'lar: " + ", ".join(f"{k}: {v}" for k, v in notable.items())
+        )
+    if example_body_str:
+        desc_parts.append(f"Örnek request body:\n{example_body_str}")
+
+    op = ApiOperation(
+        op_id="CURL_OP1",
+        method=method,
+        path=path,
+        summary=f"{method} {path}",
+        description="\n".join(desc_parts),
+        example_body=example_body_str,
+    )
+
+    return op, base_url, headers, cookies
+
+
+def parse_curl_collection(
+    text: str,
+) -> List[Tuple[ApiOperation, str, Dict[str, str], Dict[str, str]]]:
+    """
+    Bir metin içindeki birden fazla curl komutunu parse eder.
+
+    curl komutları aşağıdaki ayraçlardan herhangi biriyle ayrılabilir:
+        - Yeni satırda başlayan  curl  komutu
+        - ---  (üç tire)
+        - Boş satır(lar)
+
+    Returns:
+        Her curl için (operation, base_url, headers, cookies) tuple listesi.
+        op_id'ler CURL_OP1, CURL_OP2, ... şeklinde otomatik atanır.
+    """
+    # Satır başında 'curl' ile başlayan bloklara böl
+    # (satır devamı \ ile birleştirilmiş çok satırlıları da yakalar)
+    blocks = re.split(r"(?m)^(?=curl\s)", text.strip())
+    blocks = [b.strip() for b in blocks if b.strip().startswith("curl")]
+
+    if not blocks:
+        raise ValueError("Dosyada hiç curl komutu bulunamadı.")
+
+    results: List[Tuple[ApiOperation, str, Dict[str, str], Dict[str, str]]] = []
+    for idx, block in enumerate(blocks, start=1):
+        op, base_url, headers, cookies = parse_curl(block)
+        op.op_id = f"CURL_OP{idx}"
+        op.summary = f"[OP{idx}] {op.method} {op.path}"
+        results.append((op, base_url, headers, cookies))
+
+    return results
+
+
+def _parse_cookie_string(cookie_str: str, target: Dict[str, str]) -> None:
+    """'name=value; name2=value2' formatındaki string'i dict'e ekler."""
+    for part in cookie_str.split("; "):
+        k, _, v = part.partition("=")
+        k = k.strip()
+        if k:
+            target[k] = v

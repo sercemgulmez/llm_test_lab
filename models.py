@@ -12,6 +12,7 @@ class ApiOperation:
     path: str
     summary: str
     description: str
+    example_body: str = ""   # curl'den veya manuel girişten gelen örnek request body
 
 
 @dataclass
