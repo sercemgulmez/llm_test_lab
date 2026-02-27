@@ -2,26 +2,9 @@
 LLM Test Lab — Otomatik API Test Senaryosu Üretim ve Yürütme Aracı
 
 Kullanım:
-    python main.py --base-url https://api.example.com [SEÇENEKLER]
-
-Örnekler:
-    # curl dosyasından otomatik parse
-    python main.py --curl-file turkcell.txt
-
-    # OpenAPI spec URL'den operasyonları al, testleri çalıştır
-    python main.py \\
-        --openapi-url https://petstore.swagger.io/v2/swagger.json \\
-        --base-url    https://petstore.swagger.io/v2
-
-    # Manuel operasyon girişi, auth token ile
-    python main.py \\
-        --base-url   https://api.example.com \\
-        --auth-token eyJhbGciOiJIUzI1NiJ9...
-
-    # Sadece senaryo üret, testleri çalıştırma
-    python main.py \\
-        --curl-file turkcell.txt \\
-        --no-run
+    python main.py                          # İnteraktif wizard
+    python main.py --curl-file turkcell.txt # Doğrudan argümanlar
+    python main.py --help                   # Tüm seçenekler
 """
 
 import argparse
@@ -47,6 +30,254 @@ from reporters.csv_reporter import (
 )
 
 
+# ── Wizard yardımcı fonksiyonları ────────────────────────────────────────────
+
+def _wi(prompt: str, default: str = "") -> str:
+    """Tek satır input. Boş bırakılırsa default döner."""
+    display = f"  {prompt} [{default}]: " if default else f"  {prompt}: "
+    try:
+        val = input(display).strip()
+        return val if val else default
+    except (KeyboardInterrupt, EOFError):
+        print("\n\nÇıkılıyor...")
+        sys.exit(0)
+
+
+def _wc(prompt: str, choices: list, default: str = None) -> str:
+    """Belirli seçeneklerden birini seçtirir (büyük/küçük harf duyarsız)."""
+    cs = "/".join(choices)
+    display = f"  {prompt} ({cs}) [{default}]: " if default else f"  {prompt} ({cs}): "
+    while True:
+        try:
+            val = input(display).strip().lower()
+            if not val and default:
+                return default.lower()
+            if val in [c.lower() for c in choices]:
+                return val
+            print(f"    Geçersiz seçim. Lütfen {cs} arasından birini girin.")
+        except (KeyboardInterrupt, EOFError):
+            print("\n\nÇıkılıyor...")
+            sys.exit(0)
+
+
+def _wms(prompt: str, options: list) -> list:
+    """Çoklu seçim. Seçilen indekslerin listesini (0 tabanlı) döner."""
+    print()
+    for i, opt in enumerate(options, 1):
+        print(f"    {i:2}) {opt}")
+    print(f"     A) Tümünü seç")
+    print()
+    while True:
+        try:
+            val = input(f"  {prompt} [virgülle ayırın, örn: 1,3,4  veya A]: ").strip().upper()
+            if not val:
+                print("    En az bir seçenek seçmelisiniz.")
+                continue
+            if val == "A":
+                return list(range(len(options)))
+            selected = []
+            valid = True
+            for part in val.split(","):
+                part = part.strip()
+                if part.isdigit():
+                    idx = int(part) - 1
+                    if 0 <= idx < len(options):
+                        if idx not in selected:
+                            selected.append(idx)
+                    else:
+                        print(f"    Geçersiz numara: {part} (1-{len(options)} arasında olmalı)")
+                        valid = False
+                        break
+                else:
+                    print(f"    Geçersiz giriş: '{part}'")
+                    valid = False
+                    break
+            if valid and selected:
+                return selected
+            elif valid:
+                print("    En az bir seçenek seçmelisiniz.")
+        except (KeyboardInterrupt, EOFError):
+            print("\n\nÇıkılıyor...")
+            sys.exit(0)
+
+
+def _separator(title: str = "") -> None:
+    if title:
+        pad = (58 - len(title)) // 2
+        print(f"\n{'─' * pad}  {title}  {'─' * pad}")
+    else:
+        print("─" * 60)
+
+
+# ── İnteraktif Wizard ────────────────────────────────────────────────────────
+
+def interactive_wizard() -> argparse.Namespace:
+    """Adım adım soru soran interaktif wizard. argparse.Namespace döner."""
+
+    print()
+    print("=" * 60)
+    print("          LLM TEST LAB — Hoş Geldiniz!")
+    print("      Otomatik API Test Senaryosu Üretici")
+    print("=" * 60)
+    print()
+    print("  Adım adım yönlendirileceksiniz.")
+    print("  İstediğiniz zaman Ctrl+C ile çıkabilirsiniz.")
+    print()
+
+    # ── Adım 1: Operasyon kaynağı ────────────────────────────────────────
+    _separator("ADIM 1 — Operasyon Kaynağı")
+    print()
+    print("    1) curl dosyasından oku")
+    print("    2) OpenAPI / Swagger URL'den çek")
+    print("    3) Manuel operasyon girişi")
+    print()
+    source = _wc("Kaynağı seçin", ["1", "2", "3"], default="1")
+
+    curl_file = None
+    openapi_url = None
+    base_url = None
+
+    if source == "1":
+        while True:
+            paths = _wi("curl dosya yolu(ları) [birden fazlaysa boşlukla ayırın]")
+            if not paths:
+                print("    Dosya yolu boş olamaz, lütfen tekrar girin.")
+                continue
+            file_list = paths.split()
+            missing = [f for f in file_list if not os.path.isfile(f)]
+            if missing:
+                print(f"    Bulunamayan dosya(lar): {', '.join(missing)}")
+                print("    Lütfen geçerli bir dosya yolu girin.")
+                continue
+            curl_file = file_list
+            break
+        base_url_inp = _wi("Base URL [curl'den otomatik alınır, opsiyonel — Enter geç]")
+        base_url = base_url_inp or None
+
+    elif source == "2":
+        openapi_url = _wi("OpenAPI/Swagger dokümanının URL'i")
+        if not openapi_url:
+            print("  HATA: URL boş olamaz.")
+            sys.exit(1)
+        base_url = _wi("API Base URL (örn: https://api.example.com/v1)")
+        if not base_url:
+            print("  HATA: Base URL boş olamaz.")
+            sys.exit(1)
+
+    else:  # manuel
+        base_url = _wi("API Base URL (örn: https://api.example.com/v1)")
+        if not base_url:
+            print("  HATA: Base URL boş olamaz.")
+            sys.exit(1)
+
+    # ── Adım 2: Kimlik doğrulama ─────────────────────────────────────────
+    _separator("ADIM 2 — Kimlik Doğrulama")
+    print()
+    auth_token = _wi("Bearer Token [yoksa Enter geç]") or None
+
+    extra_headers_raw: list = []
+    add_hdr = _wc("Ekstra HTTP header eklemek ister misiniz?", ["e", "h"], default="h")
+    if add_hdr == "e":
+        print("  Her satıra bir header. Bitirmek için boş bırakın.")
+        while True:
+            hdr = _wi("  Header (örn: App-Channel-Type: WEB) [bitirmek için Enter]")
+            if not hdr:
+                break
+            extra_headers_raw.append(hdr)
+
+    cookie_str = _wi("Cookie string [yoksa Enter geç]") or None
+
+    # ── Adım 3: Generator seçimi ─────────────────────────────────────────
+    _separator("ADIM 3 — Generator Seçimi")
+    print()
+    print("  Hangi generator'ları kullanmak istersiniz?")
+
+    gen_options = ["Geleneksel şablon  (API anahtarı gerektirmez)"]
+    gen_keys = ["traditional"]
+
+    for m in config.OPENAI_MODELS:
+        gen_options.append(f"OpenAI            {m}")
+        gen_keys.append(f"openai:{m}")
+    for m in config.GEMINI_MODELS:
+        gen_options.append(f"Google Gemini     {m}")
+        gen_keys.append(f"gemini:{m}")
+    for m in config.CLAUDE_MODELS:
+        gen_options.append(f"Anthropic Claude  {m}")
+        gen_keys.append(f"claude:{m}")
+
+    selected_indices = _wms("Generator seçin", gen_options)
+    selected_keys = [gen_keys[i] for i in selected_indices]
+
+    # ── Adım 4: Senaryo sayısı ────────────────────────────────────────────
+    _separator("ADIM 4 — Senaryo Sayısı")
+    print()
+    print(f"  Her operasyon için kaç LLM test senaryosu üretilsin?")
+    num_cases_str = _wi("Senaryo sayısı", str(config.NUM_CASES_PER_OPERATION))
+    try:
+        num_cases = max(1, min(int(num_cases_str), config.MAX_CASES_PER_OPERATION))
+    except ValueError:
+        num_cases = config.NUM_CASES_PER_OPERATION
+
+    # ── Adım 5: Test çalıştırma ───────────────────────────────────────────
+    _separator("ADIM 5 — Test Çalıştırma")
+    print()
+    run_str = _wc("Üretilen testler API'ye karşı gerçekten çalıştırılsın mı?", ["e", "h"], default="e")
+    no_run = run_str == "h"
+
+    # ── Adım 6: Çıktı klasörü ─────────────────────────────────────────────
+    _separator("ADIM 6 — Çıktı Ayarları")
+    print()
+    output_dir = _wi("Çıktı klasörü", config.OUTPUT_DIR)
+
+    # ── Özet ──────────────────────────────────────────────────────────────
+    print()
+    print("=" * 60)
+    print("  ÖZET — Başlamadan önce kontrol edin")
+    print("─" * 60)
+    if curl_file:
+        print(f"  Kaynak       : curl ({', '.join(curl_file)})")
+    elif openapi_url:
+        print(f"  Kaynak       : OpenAPI ({openapi_url})")
+    else:
+        print(f"  Kaynak       : Manuel giriş")
+
+    base_display = base_url or "(curl'den otomatik alınacak)"
+    print(f"  Base URL     : {base_display}")
+    print(f"  Auth Token   : {'Var' if auth_token else 'Yok'}")
+    print(f"  Ekstra Header: {len(extra_headers_raw)} adet")
+    print(f"  Cookie       : {'Var' if cookie_str else 'Yok'}")
+    print(f"  Generator    :")
+    for i in selected_indices:
+        print(f"               - {gen_options[i].strip()}")
+    print(f"  Senaryo/op   : {num_cases}")
+    print(f"  Test çalıştır: {'Hayir' if no_run else 'Evet'}")
+    print(f"  Çıktı        : {output_dir}/")
+    print("=" * 60)
+    print()
+
+    confirm = _wc("Başlamak istiyor musunuz?", ["e", "h"], default="e")
+    if confirm != "e":
+        print("\nİptal edildi.")
+        sys.exit(0)
+
+    print()
+
+    return argparse.Namespace(
+        curl_file=curl_file,
+        openapi_url=openapi_url,
+        base_url=base_url,
+        auth_token=auth_token,
+        no_run=no_run,
+        headers=extra_headers_raw,
+        cookie=cookie_str,
+        output_dir=output_dir,
+        selected_generators=selected_keys,
+        num_cases=num_cases,
+    )
+
+
+# ── Argparse (doğrudan argüman kullanımı) ────────────────────────────────────
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="llm_test_lab",
@@ -59,76 +290,55 @@ def parse_args() -> argparse.Namespace:
         metavar="FILE",
         nargs="+",
         default=None,
-        help="curl komutlarını içeren dosya(lar). Tek dosyada birden fazla curl olabilir. "
-             "Verilirse --base-url ve --openapi-url'ye gerek kalmaz. "
-             "Örn: --curl-file a.txt b.txt",
+        help="curl komutlarını içeren dosya(lar).",
     )
+    parser.add_argument("--openapi-url", metavar="URL")
+    parser.add_argument("--base-url", metavar="URL", default=None)
+    parser.add_argument("--auth-token", metavar="TOKEN", default=None)
+    parser.add_argument("--no-run", action="store_true")
     parser.add_argument(
-        "--openapi-url",
-        metavar="URL",
-        help="OpenAPI / Swagger JSON veya YAML dokümanının URL'i.",
+        "--header", metavar="KEY: VALUE", action="append",
+        dest="headers", default=[],
     )
+    parser.add_argument("--cookie", metavar="COOKIE_STRING", default=None)
     parser.add_argument(
-        "--base-url",
-        metavar="URL",
-        default=None,
-        help="Test edilecek API'nin base URL'i (örn: https://api.example.com/v1). "
-             "--curl-file verilmişse opsiyoneldir.",
-    )
-    parser.add_argument(
-        "--auth-token",
-        metavar="TOKEN",
-        default=None,
-        help="Bearer token (Authorization: Bearer <token> başlığına eklenir).",
-    )
-    parser.add_argument(
-        "--no-run",
-        action="store_true",
-        help="Test senaryolarını üret ama API'ye karşı çalıştırma.",
-    )
-    parser.add_argument(
-        "--header",
-        metavar="KEY: VALUE",
-        action="append",
-        dest="headers",
-        default=[],
-        help="Ekstra HTTP header (tekrarlanabilir). Örn: --header 'App-Channel-Type: WEB'",
-    )
-    parser.add_argument(
-        "--cookie",
-        metavar="COOKIE_STRING",
-        default=None,
-        help="Ham cookie string. Örn: --cookie 'sessionId=abc; token=xyz'",
-    )
-    parser.add_argument(
-        "--output-dir",
-        metavar="DIR",
+        "--output-dir", metavar="DIR",
         default=config.OUTPUT_DIR,
-        help=f"Çıktıların kaydedileceği klasör (varsayılan: {config.OUTPUT_DIR}).",
     )
-    return parser.parse_args()
+    ns = parser.parse_args()
+    ns.selected_generators = None  # Tümünü kullan
+    ns.num_cases = config.NUM_CASES_PER_OPERATION
+    return ns
 
 
-def _build_llm_generators() -> list:
+# ── Generator builder ────────────────────────────────────────────────────────
+
+def _build_llm_generators(selected_keys: list = None) -> list:
     """
-    Yapılandırılmış LLM generator'larının listesini döner.
-    Her öğe (generator_instance, variant_name, variant_desc) tuple'ıdır.
+    LLM generator tuple listesi döner: (instance, variant_name, variant_desc)
+    selected_keys: ["openai:gpt-4.1-mini", "gemini:...", "claude:..."]
+                   None ise tümü dahil edilir.
     """
+    def _include(key: str) -> bool:
+        return selected_keys is None or key in selected_keys
+
     generators = []
     for model in config.OPENAI_MODELS:
-        for v_name, v_desc in config.PROMPT_VARIANTS.items():
-            generators.append((OpenAIGenerator(model), v_name, v_desc))
+        if _include(f"openai:{model}"):
+            for v_name, v_desc in config.PROMPT_VARIANTS.items():
+                generators.append((OpenAIGenerator(model), v_name, v_desc))
     for model in config.GEMINI_MODELS:
-        for v_name, v_desc in config.PROMPT_VARIANTS.items():
-            generators.append((GeminiGenerator(model), v_name, v_desc))
+        if _include(f"gemini:{model}"):
+            for v_name, v_desc in config.PROMPT_VARIANTS.items():
+                generators.append((GeminiGenerator(model), v_name, v_desc))
     for model in config.CLAUDE_MODELS:
-        for v_name, v_desc in config.PROMPT_VARIANTS.items():
-            generators.append((ClaudeGenerator(model), v_name, v_desc))
+        if _include(f"claude:{model}"):
+            for v_name, v_desc in config.PROMPT_VARIANTS.items():
+                generators.append((ClaudeGenerator(model), v_name, v_desc))
     return generators
 
 
 def _parse_cli_headers(header_list: list) -> dict:
-    """--header 'Key: Value' listesini dict'e çevirir."""
     result = {}
     for h in header_list:
         key, _, value = h.partition(": ")
@@ -138,7 +348,6 @@ def _parse_cli_headers(header_list: list) -> dict:
 
 
 def _parse_cli_cookies(cookie_str: str) -> dict:
-    """'name=val; name2=val2' string'ini dict'e çevirir."""
     result = {}
     for part in cookie_str.split("; "):
         k, _, v = part.partition("=")
@@ -147,22 +356,27 @@ def _parse_cli_cookies(cookie_str: str) -> dict:
     return result
 
 
+# ── Ana akış ─────────────────────────────────────────────────────────────────
+
 def main() -> None:
     load_dotenv()
-    args = parse_args()
 
-    # ── 0. Header / Cookie hazırlığı ────────────────────────────────────────
+    # Argüman yoksa interaktif wizard
+    if len(sys.argv) == 1:
+        args = interactive_wizard()
+    else:
+        args = parse_args()
+
+    # ── Header / Cookie hazırlığı ────────────────────────────────────────
     extra_headers = _parse_cli_headers(args.headers)
     cookies = _parse_cli_cookies(args.cookie) if args.cookie else {}
 
-    # ── 1. Operasyonları al ─────────────────────────────────────────────────
+    # ── Operasyonları al ─────────────────────────────────────────────────
     base_url = args.base_url
 
     if args.curl_file:
-        # Bir veya birden fazla curl dosyasını parse et
         operations = []
         derived_base_url = None
-
         for filepath in args.curl_file:
             try:
                 with open(filepath, "r", encoding="utf-8") as f:
@@ -170,25 +384,20 @@ def main() -> None:
             except OSError as e:
                 print(f"HATA: curl dosyası okunamadı ({filepath}): {e}", file=sys.stderr)
                 sys.exit(1)
-
             try:
                 parsed_list = parse_curl_collection(curl_text)
             except ValueError as e:
                 print(f"HATA: curl parse edilemedi ({filepath}): {e}", file=sys.stderr)
                 sys.exit(1)
-
             for op, op_base_url, curl_headers, curl_cookies in parsed_list:
-                # İlk curl'den base_url al
                 if derived_base_url is None:
                     derived_base_url = op_base_url
                 elif op_base_url != derived_base_url:
                     print(f"UYARI: {op.op_id} farklı host ({op_base_url}), "
                           f"base URL olarak {derived_base_url} kullanılıyor.")
-                # curl header/cookie'lerini biriktir (CLI argümanları override eder)
                 cookies = {**curl_cookies, **cookies}
                 extra_headers = {**curl_headers, **extra_headers}
                 operations.append(op)
-
         base_url = base_url or derived_base_url
         print(f"{len(operations)} curl operasyonu parse edildi: "
               + ", ".join(f"{op.method} {op.path}" for op in operations))
@@ -216,41 +425,50 @@ def main() -> None:
         print("Operasyon bulunamadı, program sonlandırılıyor.")
         sys.exit(0)
 
+    print()
     print("=" * 60)
-    print("LLM TEST LAB")
-    print(f"Base URL : {base_url}")
-    print(f"Çıktı    : {args.output_dir}")
+    print("  LLM TEST LAB — Başlıyor")
+    print(f"  Base URL : {base_url}")
+    print(f"  Çıktı    : {args.output_dir}")
     print("=" * 60)
+    print()
 
     os.makedirs(args.output_dir, exist_ok=True)
     save_operations_csv(operations, args.output_dir)
 
-    # ── 2. Test senaryolarını üret ──────────────────────────────────────────
+    # ── Test senaryolarını üret ──────────────────────────────────────────
     all_rows: list = []
+    selected_keys = getattr(args, "selected_generators", None)
+    num_cases = getattr(args, "num_cases", config.NUM_CASES_PER_OPERATION)
 
     # Geleneksel şablon
-    trad_gen = TraditionalGenerator()
-    all_rows.extend(trad_gen.generate(operations, "", "", 0))
+    if selected_keys is None or "traditional" in selected_keys:
+        trad_gen = TraditionalGenerator()
+        all_rows.extend(trad_gen.generate(operations, "", "", 0))
+        print(f"  [Geleneksel] {len(all_rows)} senaryo üretildi.")
 
     # LLM tabanlı generator'lar
-    for gen_instance, v_name, v_desc in _build_llm_generators():
+    for gen_instance, v_name, v_desc in _build_llm_generators(selected_keys):
+        gen_label = f"{type(gen_instance).__name__} ({v_name})"
+        print(f"  [{gen_label}] üretiliyor...", end=" ", flush=True)
         try:
             rows = gen_instance.generate(
                 operations,
                 variant_name=v_name,
                 variant_desc=v_desc,
-                num_cases=config.NUM_CASES_PER_OPERATION,
+                num_cases=num_cases,
             )
             all_rows.extend(rows)
+            print(f"{len(rows)} senaryo.")
         except RuntimeError as e:
-            gen_label = type(gen_instance).__name__
-            print(f"UYARI [{gen_label}]: {e} — bu generator atlandı.")
+            print(f"ATILDI — {e}")
 
-    print(f"\nToplam {len(all_rows)} test senaryosu üretildi.")
+    print()
+    print(f"Toplam {len(all_rows)} test senaryosu üretildi.")
 
-    # ── 3. Testleri çalıştır (opsiyonel) ───────────────────────────────────
+    # ── Testleri çalıştır ───────────────────────────────────────────────
     if args.no_run:
-        print("--no-run aktif: testler çalıştırılmıyor.")
+        print("Testler çalıştırılmıyor (--no-run / wizard seçimi).")
         executed_rows = all_rows
     else:
         executed_rows = run_testcases(
@@ -261,7 +479,7 @@ def main() -> None:
             cookies=cookies or None,
         )
 
-    # ── 4. Raporla ─────────────────────────────────────────────────────────
+    # ── Raporla ────────────────────────────────────────────────────────
     save_results_csv(executed_rows, args.output_dir)
 
     if not args.no_run:
@@ -269,7 +487,8 @@ def main() -> None:
         save_generator_metrics_csv(metrics, args.output_dir)
         print_summary_table(executed_rows)
 
-    print(f"\nTamamlandı. Çıktılar: {args.output_dir}/")
+    print()
+    print(f"Tamamlandi. Ciktilar: {args.output_dir}/")
 
 
 if __name__ == "__main__":

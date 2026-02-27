@@ -1,0 +1,25 @@
+op_id,method,path,summary,description
+CURL_OP1,POST,/api/web/packages,[OP1] POST /api/web/packages,"Gerekli header'lar: App-Channel-Type: WEB, Language-Prefix: tr, User-Redis-SessionId: WEB:RDS:20260227230904_B22A7A4C9EB94F6888303513B76A6AB9, channel: WEB
+Örnek request body:
+{
+  ""newFilterLogic"": true,
+  ""requestedFilters"": [
+    {
+      ""filterType"": ""CATEGORY_FILTER""
+    },
+    {
+      ""filterType"": ""PACKAGE_GROUPS_FILTER""
+    },
+    {
+      ""filterType"": ""PRICES_FILTER""
+    },
+    {
+      ""filterType"": ""VOICE_AMOUNTS_FILTER""
+    },
+    {
+      ""filterType"": ""DATA_AMOUNTS_FILTER""
+    }
+  ],
+  ""filterMap"": {},
+  ""paymentType"": ""POSTPAID""
+}"
