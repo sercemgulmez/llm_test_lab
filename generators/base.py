@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
 
 from models import ApiOperation
-from config import MAX_CASES_PER_OPERATION, RETRY_MAX_ATTEMPTS, RETRY_BACKOFF_SECONDS
+from config import RETRY_MAX_ATTEMPTS, RETRY_BACKOFF_SECONDS
 
 
 def build_llm_prompt(op: ApiOperation, num_cases: int, variant_name: str, variant_desc: str) -> str:
@@ -110,7 +110,6 @@ class BaseGenerator(ABC):
         num_cases: int,
     ) -> List[Dict]:
         """Verilen operasyonlar için test senaryoları üretir."""
-        num_cases = min(num_cases, MAX_CASES_PER_OPERATION)
         rows: List[Dict] = []
         for op in operations:
             result = self._generate_for_operation_with_retry(

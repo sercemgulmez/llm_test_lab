@@ -213,10 +213,7 @@ def interactive_wizard() -> argparse.Namespace:
     print()
     print(f"  Her operasyon için kaç LLM test senaryosu üretilsin?")
     num_cases_str = _wi("Senaryo sayısı", str(config.NUM_CASES_PER_OPERATION))
-    try:
-        num_cases = max(1, min(int(num_cases_str), config.MAX_CASES_PER_OPERATION))
-    except ValueError:
-        num_cases = config.NUM_CASES_PER_OPERATION
+    num_cases = config.normalize_num_cases(num_cases_str)
 
     # ── Adım 5: Test çalıştırma ───────────────────────────────────────────
     _separator("ADIM 5 — Test Çalıştırma")

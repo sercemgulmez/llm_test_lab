@@ -1,0 +1,1002 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LLM Test Lab</title>
+  <style>
+    /* ── Reset & Base ───────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:        #0d1117;
+      --surface:   #161b22;
+      --border:    #30363d;
+      --text:      #e6edf3;
+      --muted:     #8b949e;
+      --blue:      #58a6ff;
+      --green:     #3fb950;
+      --red:       #f85149;
+      --yellow:    #d29922;
+      --orange:    #d97b42;
+      --purple:    #bc8cff;
+    }
+    html, body { height: 100%; }
+    body {
+      font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      font-size: 14px;
+    }
+
+    /* ── Header ─────────────────────────────────────────── */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+    header .logo { font-size: 1.4rem; }
+    header h1 { font-size: 1rem; font-weight: 600; }
+    .chip {
+      background: #388bfd1a;
+      color: var(--blue);
+      border: 1px solid #388bfd33;
+      border-radius: 20px;
+      padding: 2px 10px;
+      font-size: 0.72rem;
+      font-weight: 500;
+    }
+    .header-hint {
+      margin-left: auto;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+
+    /* ── Layout ─────────────────────────────────────────── */
+    .layout {
+      display: grid;
+      grid-template-columns: 370px 1fr;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* ── Left Panel ─────────────────────────────────────── */
+    .panel-left {
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px;
+    }
+    .card-title {
+      font-size: 0.72rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    /* ── Radio / Source ─────────────────────────────────── */
+    .radio-group { display: flex; flex-direction: column; gap: 6px; }
+    .radio-opt {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: background 0.12s, border-color 0.12s;
+    }
+    .radio-opt:hover { background: #21262d; border-color: var(--border); }
+    .radio-opt input { accent-color: var(--blue); margin: 0; }
+    .source-panel { display: none; margin-top: 10px; }
+    .source-panel.active { display: flex; flex-direction: column; gap: 8px; }
+
+    /* ── File drop zone ─────────────────────────────────── */
+    .drop-zone {
+      border: 2px dashed var(--border);
+      border-radius: 8px;
+      padding: 18px 12px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+    .drop-zone:hover { border-color: var(--blue); background: #21262d; }
+    .drop-zone.ok { border-color: var(--green); border-style: solid; }
+    .drop-zone .ok-text { color: var(--green); margin-top: 4px; font-size: 0.8rem; }
+
+    /* ── Form inputs ─────────────────────────────────────── */
+    .field { display: flex; flex-direction: column; gap: 4px; }
+    .field label { font-size: 0.78rem; color: var(--muted); }
+    input[type="text"],
+    input[type="url"],
+    input[type="number"],
+    textarea {
+      background: #21262d;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 7px 10px;
+      font-size: 0.875rem;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.15s;
+      width: 100%;
+    }
+    input:focus, textarea:focus { border-color: var(--blue); }
+    textarea { resize: vertical; min-height: 56px; }
+    ::placeholder { color: #484f58; }
+
+    /* ── Checkboxes / Generators ────────────────────────── */
+    .gen-list { display: flex; flex-direction: column; gap: 4px; }
+    .gen-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 8px;
+      border-radius: 5px;
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+    .gen-item:hover { background: #21262d; }
+    .gen-item input { accent-color: var(--blue); width: 14px; height: 14px; margin: 0; }
+    .gen-item .gen-name { font-size: 0.875rem; flex: 1; }
+    .tag {
+      font-size: 0.68rem;
+      padding: 1px 7px;
+      border-radius: 10px;
+      font-weight: 500;
+    }
+    .tag-trad   { background: #8b949e22; color: var(--muted); }
+    .tag-openai { background: #10a37f22; color: #10a37f; }
+    .tag-gemini { background: #4285f422; color: #4285f4; }
+    .tag-claude { background: #d97b4222; color: var(--orange); }
+
+    /* ── Slider ──────────────────────────────────────────── */
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--blue);
+      background: transparent;
+    }
+    .slider-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.72rem;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
+    /* ── Toggle ──────────────────────────────────────────── */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 2px 0;
+    }
+    .toggle-row span { font-size: 0.875rem; }
+    .switch { position: relative; width: 42px; height: 22px; flex-shrink: 0; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .sw-track {
+      position: absolute; inset: 0;
+      background: #21262d;
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      cursor: pointer;
+      transition: 0.18s;
+    }
+    .sw-track::before {
+      content: "";
+      position: absolute;
+      width: 14px; height: 14px;
+      left: 3px; top: 3px;
+      background: var(--muted);
+      border-radius: 50%;
+      transition: 0.18s;
+    }
+    .switch input:checked + .sw-track { background: #1f6feb; border-color: #388bfd; }
+    .switch input:checked + .sw-track::before { background: #fff; transform: translateX(20px); }
+
+    /* ── Run button ──────────────────────────────────────── */
+    #run-btn {
+      width: 100%;
+      background: #238636;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 11px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+    }
+    #run-btn:hover:not(:disabled) { background: #2ea043; }
+    #run-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    #run-btn.stop { background: #da3633; }
+    #run-btn.stop:hover { background: #f85149; }
+
+    /* ── Right Panel ─────────────────────────────────────── */
+    .panel-right { display: flex; flex-direction: column; overflow: hidden; }
+
+    .tabs {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      padding: 0 16px;
+      flex-shrink: 0;
+    }
+    .tab-btn {
+      padding: 11px 14px;
+      cursor: pointer;
+      font-size: 0.875rem;
+      border-bottom: 2px solid transparent;
+      color: var(--muted);
+      transition: color 0.12s, border-color 0.12s;
+      background: none;
+      border-left: none; border-right: none; border-top: none;
+      font-family: inherit;
+    }
+    .tab-btn:hover:not(.active) { color: #c9d1d9; }
+    .tab-btn.active { color: var(--text); border-bottom-color: #f78166; }
+
+    .tab-pane { display: none; flex: 1; overflow-y: auto; padding: 16px; }
+    .tab-pane.active { display: block; }
+
+    /* ── Progress bar ────────────────────────────────────── */
+    #progress-wrap { display: none; margin-bottom: 12px; }
+    #progress-bar {
+      height: 3px; background: var(--border); border-radius: 2px; overflow: hidden;
+    }
+    #progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--blue), var(--green));
+      width: 0%;
+      transition: width 0.4s;
+    }
+    @keyframes shimmer {
+      0%,100% { opacity: 1; }
+      50% { opacity: 0.6; }
+    }
+    #progress-fill.active { animation: shimmer 1.4s infinite; }
+
+    /* ── Log box ─────────────────────────────────────────── */
+    #log-box {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px;
+      font-family: 'Consolas', 'Courier New', monospace;
+      font-size: 0.82rem;
+      line-height: 1.65;
+      min-height: 300px;
+      max-height: calc(100vh - 200px);
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .log-line { display: block; padding: 1px 0; }
+    .log-line.err  { color: var(--red); }
+    .log-line.ok   { color: var(--green); }
+    .log-line.info { color: var(--blue); }
+    .log-line.warn { color: var(--yellow); }
+
+    /* ── Results tab ─────────────────────────────────────── */
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    .metric-card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 14px;
+    }
+    .metric-card .metric-label { font-size: 0.72rem; color: var(--muted); margin-bottom: 4px; }
+    .metric-card .metric-val { font-size: 1.3rem; font-weight: 700; }
+    .metric-card .metric-sub { font-size: 0.75rem; color: var(--muted); margin-top: 2px; }
+    .section-title {
+      font-size: 0.78rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin: 18px 0 10px;
+    }
+    .leaderboard {
+      display: grid;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    .leader-row {
+      display: grid;
+      grid-template-columns: minmax(220px, 1.5fr) minmax(140px, 1fr) minmax(170px, 1fr) minmax(120px, 0.7fr);
+      gap: 12px;
+      align-items: center;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 14px;
+    }
+    .leader-name { font-weight: 600; }
+    .leader-meta { color: var(--muted); font-size: 0.78rem; }
+    .leader-rate {
+      font-size: 1.1rem;
+      font-weight: 700;
+      text-align: right;
+    }
+    .comparison-wrap {
+      overflow-x: auto;
+      margin-bottom: 18px;
+    }
+    .matrix-table td, .matrix-table th { white-space: nowrap; }
+    .matrix-stat { min-width: 120px; }
+    .matrix-cell-complex { min-width: 138px; }
+    .helper-text {
+      font-size: 0.72rem;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+
+    .results-actions { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+    .btn-secondary {
+      background: #21262d;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 14px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex; align-items: center; gap: 6px;
+      transition: background 0.12s;
+    }
+    .btn-secondary:hover { background: #30363d; }
+
+    .results-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    thead th {
+      background: var(--surface);
+      color: var(--muted);
+      text-align: left;
+      padding: 8px 10px;
+      border-bottom: 2px solid var(--border);
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      white-space: nowrap;
+      position: sticky; top: 0;
+    }
+    tbody td { padding: 7px 10px; border-bottom: 1px solid #21262d; vertical-align: top; }
+    tbody tr:hover td { background: #161b22; }
+    .cell-pass  { color: var(--green); font-weight: 600; }
+    .cell-fail  { color: var(--red); }
+    .cell-code-2xx { color: var(--green); }
+    .cell-code-4xx { color: var(--yellow); }
+    .cell-code-5xx { color: var(--red); }
+    .cell-wrap { max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    .empty-state {
+      text-align: center;
+      color: var(--muted);
+      padding: 60px 20px;
+    }
+    .empty-state .big { font-size: 2.5rem; margin-bottom: 10px; }
+
+    /* ── Filter bar ──────────────────────────────────────── */
+    .filter-bar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+      flex-wrap: wrap;
+    }
+    .filter-bar input[type="text"] { max-width: 260px; }
+    .filter-bar select { max-width: 160px; }
+
+    /* ── Scrollbar ───────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ─────────────────────────────────────────────────────────── -->
+<header>
+  <span class="logo">🧪</span>
+  <h1>LLM Test Lab</h1>
+  <span class="chip">API Test Senaryosu Üretici</span>
+  <span class="header-hint">python app.py → <a href="http://localhost:5000" style="color:var(--blue)">localhost:5000</a></span>
+</header>
+
+<div class="layout">
+
+  <!-- ── Left Panel ───────────────────────────────────────────────────── -->
+  <div class="panel-left">
+
+    <!-- Kaynak -->
+    <div class="card">
+      <div class="card-title">📂 Operasyon Kaynağı</div>
+      <div class="radio-group">
+        <label class="radio-opt">
+          <input type="radio" name="source" value="curl" id="src-curl" />
+          curl Dosyasından Oku
+        </label>
+        <label class="radio-opt">
+          <input type="radio" name="source" value="openapi" id="src-openapi" checked />
+          OpenAPI / Swagger URL
+        </label>
+      </div>
+
+      <!-- curl panel -->
+      <div class="source-panel" id="panel-curl">
+        <div class="drop-zone" id="drop-zone" onclick="document.getElementById('curl-input').click()">
+          <input type="file" id="curl-input" accept=".txt,.curl" style="display:none" />
+          <div>📄 Dosya seçin veya buraya sürükleyin</div>
+          <div style="font-size:0.72rem;margin-top:3px">.txt · .curl</div>
+          <div class="ok-text" id="drop-ok"></div>
+        </div>
+        <div class="field">
+          <label>Base URL <em style="color:var(--muted)">(opsiyonel — curl'den alınır)</em></label>
+          <input type="url" id="curl-base-url" placeholder="https://api.example.com/v1" />
+        </div>
+      </div>
+
+      <!-- openapi panel -->
+      <div class="source-panel active" id="panel-openapi">
+        <div class="field">
+          <label>OpenAPI / Swagger URL <span style="color:var(--red)">*</span></label>
+          <input type="url" id="openapi-url" placeholder="https://petstore.swagger.io/v2/swagger.json" />
+        </div>
+        <div class="field">
+          <label>Base URL <span style="color:var(--red)">*</span></label>
+          <input type="url" id="openapi-base-url" placeholder="https://petstore.swagger.io/v2" />
+        </div>
+      </div>
+    </div>
+
+    <!-- Kimlik Doğrulama -->
+    <div class="card">
+      <div class="card-title">🔑 Kimlik Doğrulama</div>
+      <div class="field">
+        <label>Bearer Token <em style="color:var(--muted)">(opsiyonel)</em></label>
+        <input type="text" id="auth-token" placeholder="eyJhbGciOiJ..." />
+      </div>
+      <div class="field" style="margin-top:8px">
+        <label>Ekstra HTTP Header'lar <em style="color:var(--muted)">(satır başına Key: Value)</em></label>
+        <textarea id="extra-headers" placeholder="App-Channel-Type: WEB&#10;X-Custom: foo"></textarea>
+      </div>
+      <div class="field" style="margin-top:8px">
+        <label>Cookie String <em style="color:var(--muted)">(opsiyonel)</em></label>
+        <input type="text" id="cookie-str" placeholder="sessionId=abc; token=xyz" />
+      </div>
+    </div>
+
+    <!-- Generator Seçimi -->
+    <div class="card">
+      <div class="card-title">🤖 Generator Seçimi</div>
+      <div class="gen-list">
+        <label class="gen-item">
+          <input type="checkbox" value="traditional" checked />
+          <span class="gen-name">Geleneksel Şablon</span>
+          <span class="tag tag-trad">No API</span>
+        </label>
+        {% for m in openai_models %}
+        <label class="gen-item">
+          <input type="checkbox" value="openai:{{ m }}" checked />
+          <span class="gen-name">{{ m }}</span>
+          <span class="tag tag-openai">OpenAI</span>
+        </label>
+        {% endfor %}
+        {% for m in gemini_models %}
+        <label class="gen-item">
+          <input type="checkbox" value="gemini:{{ m }}" checked />
+          <span class="gen-name">{{ m }}</span>
+          <span class="tag tag-gemini">Gemini</span>
+        </label>
+        {% endfor %}
+        {% for m in claude_models %}
+        <label class="gen-item">
+          <input type="checkbox" value="claude:{{ m }}" checked />
+          <span class="gen-name">{{ m }}</span>
+          <span class="tag tag-claude">Claude</span>
+        </label>
+        {% endfor %}
+      </div>
+
+      <div style="margin-top:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+          <span style="font-size:0.78rem;color:var(--muted)">Operasyon başına senaryo:</span>
+          <strong id="nc-val" style="font-size:0.9rem">{{ default_num_cases }}</strong>
+        </div>
+        <input type="number" id="num-cases" min="1" step="1" value="{{ default_num_cases }}"
+               oninput="document.getElementById('nc-val').textContent=this.value || '1'" />
+        <div class="helper-text">Üst sınır yok. Pozitif bir sayı girin; tüm seçili LLM'ler için bu kadar case üretilir.</div>
+      </div>
+    </div>
+
+    <!-- Çalıştırma -->
+    <div class="card">
+      <div class="card-title">⚙️ Çalıştırma</div>
+      <div class="toggle-row" style="margin-bottom:10px">
+        <span>Testleri API'ye karşı çalıştır</span>
+        <label class="switch">
+          <input type="checkbox" id="run-toggle" checked />
+          <div class="sw-track"></div>
+        </label>
+      </div>
+      <div class="field">
+        <label>Çıktı Klasörü</label>
+        <input type="text" id="output-dir" value="{{ default_output }}" />
+      </div>
+    </div>
+
+    <button id="run-btn" onclick="startJob()">▶&nbsp; ÇALIŞTIR</button>
+  </div>
+
+  <!-- ── Right Panel ──────────────────────────────────────────────────── -->
+  <div class="panel-right">
+    <div class="tabs">
+      <button class="tab-btn active" onclick="switchTab('logs',this)">📋 Loglar</button>
+      <button class="tab-btn" onclick="switchTab('results',this)">📊 Sonuçlar</button>
+    </div>
+
+    <!-- Logs -->
+    <div class="tab-pane active" id="pane-logs">
+      <div id="progress-wrap">
+        <div id="progress-bar"><div id="progress-fill"></div></div>
+        <div style="font-size:0.72rem;color:var(--muted);margin-top:4px" id="progress-label">Çalışıyor...</div>
+      </div>
+      <div id="log-box"><span class="log-line info">Hazır. Ayarları yapıp ▶ ÇALIŞTIR butonuna basın.</span></div>
+    </div>
+
+    <!-- Results -->
+    <div class="tab-pane" id="pane-results">
+      <div id="results-content">
+        <div class="empty-state">
+          <div class="big">📊</div>
+          <div>Henüz sonuç yok.</div>
+          <div style="font-size:0.8rem;margin-top:6px">Testi çalıştırdıktan sonra burada görünecek.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ── Globals ──────────────────────────────────────────────────────────
+  let currentJobId = null;
+  let uploadedFilePath = null;
+  let eventSource = null;
+  let logCount = 0;
+
+  // ── Source radio ─────────────────────────────────────────────────────
+  document.querySelectorAll('input[name="source"]').forEach(r => {
+    r.addEventListener("change", function () {
+      document.querySelectorAll(".source-panel").forEach(p => p.classList.remove("active"));
+      document.getElementById("panel-" + this.value).classList.add("active");
+    });
+  });
+
+  // ── File upload ───────────────────────────────────────────────────────
+  const curlInput = document.getElementById("curl-input");
+  const dropZone  = document.getElementById("drop-zone");
+
+  curlInput.addEventListener("change", () => { if (curlInput.files[0]) doUpload(curlInput.files[0]); });
+
+  dropZone.addEventListener("dragover",  e => { e.preventDefault(); dropZone.style.borderColor = "var(--blue)"; });
+  dropZone.addEventListener("dragleave", () => { dropZone.style.borderColor = ""; });
+  dropZone.addEventListener("drop", e => {
+    e.preventDefault();
+    dropZone.style.borderColor = "";
+    if (e.dataTransfer.files[0]) doUpload(e.dataTransfer.files[0]);
+  });
+
+  function doUpload(file) {
+    const fd = new FormData();
+    fd.append("file", file);
+    fetch("/upload", { method: "POST", body: fd })
+      .then(r => r.json())
+      .then(d => {
+        uploadedFilePath = d.path;
+        document.getElementById("drop-ok").textContent = "✓ " + d.name;
+        dropZone.classList.add("ok");
+      });
+  }
+
+  // ── Tab switching ─────────────────────────────────────────────────────
+  function switchTab(name, el) {
+    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+    document.querySelectorAll(".tab-pane").forEach(p => p.classList.remove("active"));
+    el.classList.add("active");
+    document.getElementById("pane-" + name).classList.add("active");
+  }
+
+  // ── Logging ───────────────────────────────────────────────────────────
+  function addLog(text, cls = "") {
+    const box = document.getElementById("log-box");
+    if (logCount === 0) box.innerHTML = "";          // first line → clear placeholder
+    logCount++;
+    const span = document.createElement("span");
+    span.className = "log-line " + cls;
+    span.textContent = text;
+    box.appendChild(span);
+    box.appendChild(document.createTextNode("\n"));
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function classifyLog(text) {
+    const t = text.toLowerCase();
+    if (t.includes("hata") || t.includes("error") || t.includes("✗")) return "err";
+    if (t.includes("uyar") || t.includes("warn"))                       return "warn";
+    if (t.includes("tamamland") || t.includes("üretildi") ||
+        t.includes("parse") || t.includes("✓"))                         return "ok";
+    if (t.includes("başlatıldı") || t.includes("başlıyor"))             return "info";
+    return "";
+  }
+
+  // ── Progress ──────────────────────────────────────────────────────────
+  function setProgress(pct, label = "") {
+    const wrap = document.getElementById("progress-wrap");
+    const fill = document.getElementById("progress-fill");
+    wrap.style.display = pct > 0 ? "block" : "none";
+    fill.style.width = pct + "%";
+    if (pct > 0 && pct < 100) fill.classList.add("active");
+    else fill.classList.remove("active");
+    if (label) document.getElementById("progress-label").textContent = label;
+  }
+
+  // ── Start job ─────────────────────────────────────────────────────────
+  function startJob() {
+    const source = document.querySelector('input[name="source"]:checked').value;
+
+    const payload = {
+      source,
+      auth_token:          document.getElementById("auth-token").value.trim(),
+      cookie:              document.getElementById("cookie-str").value.trim(),
+      no_run:              !document.getElementById("run-toggle").checked,
+      output_dir:          document.getElementById("output-dir").value.trim(),
+      num_cases:           parseInt(document.getElementById("num-cases").value),
+      selected_generators: [...document.querySelectorAll(".gen-item input:checked")].map(c => c.value),
+      headers:             document.getElementById("extra-headers").value
+                             .split("\n").map(h => h.trim()).filter(Boolean),
+    };
+
+    if (source === "curl") {
+      if (!uploadedFilePath) { alert("Lütfen bir curl dosyası yükleyin."); return; }
+      payload.curl_file_path = uploadedFilePath;
+      payload.base_url = document.getElementById("curl-base-url").value.trim();
+    } else {
+      payload.openapi_url = document.getElementById("openapi-url").value.trim();
+      payload.base_url    = document.getElementById("openapi-base-url").value.trim();
+      if (!payload.openapi_url || !payload.base_url) {
+        alert("OpenAPI URL ve Base URL zorunludur."); return;
+      }
+    }
+
+    // UI reset
+    logCount = 0;
+    document.getElementById("log-box").innerHTML = "";
+    setProgress(10, "Başlatılıyor...");
+
+    const btn = document.getElementById("run-btn");
+    btn.disabled = true;
+    btn.textContent = "⏳  Çalışıyor...";
+
+    // Switch to logs tab
+    switchTab("logs", document.querySelector(".tab-btn"));
+
+    if (eventSource) { eventSource.close(); eventSource = null; }
+
+    fetch("/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) {
+        addLog("HATA: " + data.error, "err");
+        btn.disabled = false;
+        btn.textContent = "▶  ÇALIŞTIR";
+        setProgress(0);
+        return;
+      }
+
+      currentJobId = data.job_id;
+      addLog("İş başlatıldı — " + data.job_id, "info");
+      setProgress(15, "Loglar bekleniyor...");
+
+      eventSource = new EventSource("/stream/" + data.job_id);
+
+      eventSource.onmessage = function (e) {
+        const msg = JSON.parse(e.data);
+        if (msg.type === "ping") return;
+
+        if (msg.type === "done") {
+          eventSource.close();
+          setProgress(100, "Tamamlandı!");
+          setTimeout(() => setProgress(0), 1500);
+          btn.disabled = false;
+          btn.classList.remove("stop");
+          btn.textContent = "▶  TEKRAR ÇALIŞTIR";
+
+          if (msg.status === "done") {
+            addLog("✓ Tamamlandı!", "ok");
+            loadResults(data.job_id);
+          } else {
+            addLog("✗ Hata ile sonlandı.", "err");
+          }
+
+        } else if (msg.type === "log") {
+          addLog(msg.text, classifyLog(msg.text));
+          const cur = parseFloat(document.getElementById("progress-fill").style.width) || 15;
+          setProgress(Math.min(90, cur + 3), "Çalışıyor...");
+
+        } else if (msg.type === "error") {
+          addLog("HATA: " + msg.text, "err");
+        }
+      };
+
+      eventSource.onerror = function () {
+        eventSource.close();
+        btn.disabled = false;
+        btn.textContent = "▶  ÇALIŞTIR";
+        setProgress(0);
+      };
+    });
+  }
+
+  // ── Load results ──────────────────────────────────────────────────────
+  function loadResults(jobId) {
+    Promise.all([
+      fetch("/result_data/" + jobId).then(r => r.json()),
+      fetch("/metrics/" + jobId).then(r => r.json()),
+      fetch("/comparison/" + jobId).then(r => r.json()),
+    ]).then(([tableData, metricsData, comparisonData]) => {
+      renderResults(jobId, tableData, metricsData, comparisonData);
+      // auto-switch
+      const tabs = document.querySelectorAll(".tab-btn");
+      switchTab("results", tabs[1]);
+    });
+  }
+
+  function renderResults(jobId, tableData, metricsData, comparisonData) {
+    const container = document.getElementById("results-content");
+    let html = "";
+
+    const overview = comparisonData?.overview || {};
+
+    // Metric cards
+    if ((metricsData && metricsData.length > 0) || overview.total_tests) {
+      html += `<div class="metrics-grid">`;
+      html += `
+        <div class="metric-card">
+          <div class="metric-label">Toplam Testcase</div>
+          <div class="metric-val">${overview.total_tests || 0}</div>
+          <div class="metric-sub">${overview.operation_count || 0} operasyon · ${overview.generator_count || 0} generator</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Geçen Test</div>
+          <div class="metric-val" style="color:var(--green)">${overview.total_pass || 0}</div>
+          <div class="metric-sub">Başarısız: ${overview.total_fail || 0}</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">En İyi Generator</div>
+          <div class="metric-val" style="font-size:1rem">${escHtml(overview.best_generator || "N/A")}</div>
+          <div class="metric-sub">Pass rate sıralamasına göre</div>
+        </div>`;
+      for (const m of metricsData) {
+        const rate = m.pass_rate !== "" ? (parseFloat(m.pass_rate) * 100).toFixed(1) + "%" : "N/A";
+        const rateColor = parseFloat(m.pass_rate) >= 0.7 ? "var(--green)"
+                        : parseFloat(m.pass_rate) >= 0.4 ? "var(--yellow)" : "var(--red)";
+        html += `
+          <div class="metric-card">
+            <div class="metric-label">${escHtml(m.generator)}</div>
+            <div class="metric-val" style="color:${rateColor}">${rate}</div>
+            <div class="metric-sub">${m.pass_count} geçti · ${m.fail_count} başarısız · ${m.total_tests} toplam</div>
+          </div>`;
+      }
+      html += `</div>`;
+    }
+
+    if (comparisonData?.generator_rankings?.length) {
+      html += `<div class="section-title">Generator Kıyas</div><div class="leaderboard">`;
+      for (const item of comparisonData.generator_rankings) {
+        const rate = item.pass_rate !== "" ? (parseFloat(item.pass_rate) * 100).toFixed(1) + "%" : "N/A";
+        const rateColor = parseFloat(item.pass_rate) >= 0.7 ? "var(--green)"
+                        : parseFloat(item.pass_rate) >= 0.4 ? "var(--yellow)" : "var(--red)";
+        html += `
+          <div class="leader-row">
+            <div>
+              <div class="leader-name">${escHtml(item.generator)}</div>
+              <div class="leader-meta">${item.total_tests} testcase · matrix skor ${formatNumber(item.matrix_score, 4)}</div>
+            </div>
+            <div class="leader-meta">${item.pass_count} geçti · ${item.fail_count} başarısız</div>
+            <div class="leader-meta">cesitlilik ${formatNumber(item.diversity_score, 3)} | ic benzerlik ${formatNumber(item.intra_similarity, 3)}</div>
+            <div class="leader-rate" style="color:${rateColor}">${rate}</div>
+          </div>`;
+      }
+      html += `</div>`;
+    }
+
+    if (comparisonData?.operation_comparison?.length) {
+      html += `<div class="section-title">Operasyon Bazlı Karşılaştırma</div>`;
+      html += `<div class="comparison-wrap"><table class="matrix-table"><thead><tr><th>Operasyon</th>`;
+      const generatorNames = comparisonData.generator_rankings.map(item => item.generator);
+      for (const generator of generatorNames) {
+        html += `<th>${escHtml(generator)}</th>`;
+      }
+      html += `</tr></thead><tbody>`;
+
+      for (const row of comparisonData.operation_comparison) {
+        html += `<tr><td><strong>${escHtml(row.operation_id)}</strong><br><span class="leader-meta">${escHtml(row.method)} ${escHtml(row.path)}</span></td>`;
+        for (const generator of generatorNames) {
+          const stats = row.generator_stats?.[generator];
+          const rate = stats && stats.pass_rate !== null ? (stats.pass_rate * 100).toFixed(1) + "%" : "N/A";
+          const rateColor = !stats || stats.pass_rate === null ? "var(--muted)"
+                          : stats.pass_rate >= 0.7 ? "var(--green)"
+                          : stats.pass_rate >= 0.4 ? "var(--yellow)" : "var(--red)";
+          html += `<td class="matrix-stat">
+            <div>${stats?.pass || 0}/${stats?.total || 0}</div>
+            <div class="leader-meta" style="color:${rateColor}">${rate}</div>
+          </td>`;
+        }
+        html += `</tr>`;
+      }
+      html += `</tbody></table></div>`;
+    }
+
+    if (comparisonData?.complex_matrix?.labels?.length) {
+      const labels = comparisonData.complex_matrix.labels;
+      html += `<div class="section-title">Kompleks KarÅŸÄ±laÅŸtÄ±rma Matrisi</div>`;
+      html += `<div class="helper-text">Hermitian pairwise matris: |z| göreli üstünlüğü, faz ise dengesizlik yönünü temsil eder. Generator sırası spektral skordan türetilir.</div>`;
+      html += `<div class="comparison-wrap"><table class="matrix-table"><thead><tr><th>Generator</th><th>Spektral Skor</th><th>Faz</th>`;
+      for (const label of labels) {
+        html += `<th>${escHtml(shortLabel(label))}</th>`;
+      }
+      html += `</tr></thead><tbody>`;
+
+      for (let i = 0; i < labels.length; i++) {
+        const label = labels[i];
+        const spectral = comparisonData.complex_matrix.spectral_scores.find(item => item.generator === label) || {};
+        html += `<tr><td><strong>${escHtml(label)}</strong></td><td>${formatNumber(spectral.score, 4)}</td><td>${formatNumber(spectral.phase, 4)}</td>`;
+        for (let j = 0; j < labels.length; j++) {
+          const cell = comparisonData.complex_matrix.matrix[i]?.[j];
+          const mag = cell ? formatNumber(cell.magnitude, 3) : "0.000";
+          const phase = cell ? formatNumber(cell.phase, 3) : "0.000";
+          html += `<td class="matrix-cell-complex"><div>|z| ${mag}</div><div class="leader-meta">∠ ${phase}</div></td>`;
+        }
+        html += `</tr>`;
+      }
+      html += `</tbody></table></div>`;
+    }
+
+    if (comparisonData?.complex_matrix?.labels?.length) {
+      const labels = comparisonData.complex_matrix.labels;
+      html += `<div class="section-title">Pairwise Similarity</div>`;
+      html += `<div class="helper-text">Bu tablo generatorlar arasi testcase benzerligini Jaccard tabanli yakinlik olarak gosterir. Dusuk deger daha yuksek yenilik anlamina gelir.</div>`;
+      html += `<div class="comparison-wrap"><table class="matrix-table"><thead><tr><th>Generator</th>`;
+      for (const label of labels) {
+        html += `<th>${escHtml(shortLabel(label))}</th>`;
+      }
+      html += `</tr></thead><tbody>`;
+      for (const left of labels) {
+        html += `<tr><td><strong>${escHtml(left)}</strong></td>`;
+        for (const right of labels) {
+          const similarity = comparisonData.complex_matrix.pairwise_similarity?.[left]?.[right];
+          html += `<td>${formatNumber(similarity, 3)}</td>`;
+        }
+        html += `</tr>`;
+      }
+      html += `</tbody></table></div>`;
+    }
+
+    // Action buttons
+    html += `<div class="results-actions">
+      <a class="btn-secondary" href="/download/${jobId}">📥 CSV İndir</a>
+    </div>`;
+
+    // Filter bar
+    if (tableData.rows && tableData.rows.length > 0) {
+      html += `
+        <div class="filter-bar">
+          <input type="text" id="filter-text" placeholder="🔍 Ara..." oninput="filterTable()" />
+          <select id="filter-pass" onchange="filterTable()">
+            <option value="">Tüm sonuçlar</option>
+            <option value="True">✓ Geçti</option>
+            <option value="False">✗ Başarısız</option>
+          </select>
+        </div>`;
+
+      // Table
+      html += `<div class="results-wrap"><table id="result-table">
+        <thead><tr>`;
+      for (const h of tableData.headers) {
+        html += `<th>${escHtml(h)}</th>`;
+      }
+      html += `</tr></thead><tbody>`;
+
+      const passIdx   = tableData.headers.indexOf("pass");
+      const statusIdx = tableData.headers.indexOf("actual_status");
+
+      for (const row of tableData.rows) {
+        html += `<tr>`;
+        for (let i = 0; i < row.length; i++) {
+          const cell = row[i] || "";
+          let cls = "cell-wrap";
+          if (i === passIdx) {
+            cls = cell === "True" ? "cell-pass" : (cell === "False" ? "cell-fail" : "");
+          } else if (i === statusIdx) {
+            const code = parseInt(cell);
+            if (code >= 200 && code < 300) cls = "cell-code-2xx";
+            else if (code >= 400 && code < 500) cls = "cell-code-4xx";
+            else if (code >= 500) cls = "cell-code-5xx";
+          }
+          html += `<td class="${cls}" title="${escHtml(cell)}">${escHtml(cell)}</td>`;
+        }
+        html += `</tr>`;
+      }
+      html += `</tbody></table></div>`;
+    } else {
+      html += `<div class="empty-state"><div class="big">📄</div><div>Sonuç CSV'si bulunamadı.</div></div>`;
+    }
+
+    container.innerHTML = html;
+  }
+
+  function filterTable() {
+    const q    = (document.getElementById("filter-text")?.value || "").toLowerCase();
+    const pass = document.getElementById("filter-pass")?.value || "";
+    const rows = document.querySelectorAll("#result-table tbody tr");
+    const headers = [...document.querySelectorAll("#result-table thead th")].map(th => th.textContent);
+    const passIdx = headers.indexOf("pass");
+    rows.forEach(tr => {
+      const text = tr.textContent.toLowerCase();
+      const passCell = passIdx >= 0 ? (tr.children[passIdx]?.textContent || "") : "";
+      const textOk = !q || text.includes(q);
+      const passOk = !pass || passCell === pass;
+      tr.style.display = textOk && passOk ? "" : "none";
+    });
+  }
+
+  function formatNumber(value, digits = 3) {
+    const num = Number(value);
+    return Number.isFinite(num) ? num.toFixed(digits) : "0.000";
+  }
+
+  function shortLabel(label) {
+    if (!label) return "";
+    return label.length > 24 ? label.slice(0, 24) + "..." : label;
+  }
+
+  function escHtml(str) {
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+</script>
+</body>
+</html>

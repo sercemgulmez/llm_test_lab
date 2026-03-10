@@ -30,8 +30,8 @@ PROMPT_VARIANTS: dict[str, str] = {
 # Operasyon başına üretilecek LLM test senaryosu sayısı
 NUM_CASES_PER_OPERATION: int = 10
 
-# Güvenlik üst sınırı
-MAX_CASES_PER_OPERATION: int = 10
+# Üst sınır yok; UI ve backend pozitif sayı kabul eder.
+MAX_CASES_PER_OPERATION: int | None = None
 
 # Varsayılan çıktı klasörü
 OUTPUT_DIR: str = "outputs"
@@ -42,3 +42,12 @@ REQUEST_TIMEOUT: int = 10
 # LLM API retry ayarları
 RETRY_MAX_ATTEMPTS: int = 3
 RETRY_BACKOFF_SECONDS: float = 2.0
+
+
+def normalize_num_cases(value: object, default: int = NUM_CASES_PER_OPERATION) -> int:
+    """Pozitif testcase sayısı döner; geçersiz girişte default kullanır."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(1, parsed)
