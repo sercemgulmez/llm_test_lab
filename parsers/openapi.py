@@ -1,4 +1,4 @@
-"""OpenAPI / Swagger dokümanlarını parse eder."""
+"""OpenAPI / Swagger document loaders and parsers."""
 
 import json
 from typing import Dict, List
@@ -9,21 +9,60 @@ import yaml
 from models import ApiOperation
 
 
-def load_openapi_from_url(url: str) -> Dict:
-    """Verilen URL'den OpenAPI / Swagger JSON veya YAML dokümanı yükler."""
-    print(f"OpenAPI/Swagger yükleniyor: {url}")
-    resp = requests.get(url, timeout=15)
-    resp.raise_for_status()
-    text = resp.text
+def _looks_like_html(text: str, content_type: str) -> bool:
+    lowered = text.lstrip().lower()
+    return (
+        "text/html" in content_type.lower()
+        or lowered.startswith("<!doctype html")
+        or lowered.startswith("<html")
+    )
+
+
+def _parse_openapi_text(text: str) -> Dict:
     try:
-        return json.loads(text)
+        spec = json.loads(text)
     except json.JSONDecodeError:
-        return yaml.safe_load(text)
+        try:
+            spec = yaml.safe_load(text)
+        except yaml.YAMLError as exc:
+            raise ValueError("OpenAPI dokumani JSON veya YAML olarak parse edilemedi.") from exc
+
+    if not isinstance(spec, dict):
+        raise ValueError("OpenAPI dokumani nesne olarak parse edilemedi.")
+
+    if "paths" not in spec or not isinstance(spec["paths"], dict):
+        raise ValueError(
+            "OpenAPI dokumani yuklendi ama 'paths' bulunamadi. "
+            "Swagger UI sayfasi veya farkli bir JSON/YAML URL'i vermis olabilirsiniz."
+        )
+
+    return spec
+
+
+def load_openapi_from_url(url: str) -> Dict:
+    """Load an OpenAPI / Swagger JSON or YAML document from a URL."""
+    print(f"OpenAPI/Swagger yukleniyor: {url}")
+    resp = requests.get(
+        url,
+        timeout=15,
+        headers={"Accept": "application/json, application/yaml, text/yaml, */*"},
+    )
+    resp.raise_for_status()
+
+    text = resp.text
+    content_type = resp.headers.get("Content-Type", "")
+    if _looks_like_html(text, content_type):
+        raise ValueError(
+            "Swagger UI HTML sayfasi geldi. Raw OpenAPI JSON/YAML URL'i verin "
+            "(ornegin /swagger.json, /openapi.json veya .yaml)."
+        )
+
+    return _parse_openapi_text(text)
 
 
 def extract_operations_from_openapi(spec: Dict) -> List[ApiOperation]:
-    """OpenAPI dokümanından HTTP operasyonlarını çıkarır."""
-    VALID_METHODS = {"get", "post", "put", "delete", "patch", "head", "options"}
+    """Extract HTTP operations from an OpenAPI document."""
+    valid_methods = {"get", "post", "put", "delete", "patch", "head", "options"}
     ops: List[ApiOperation] = []
     paths = spec.get("paths", {})
     counter = 1
@@ -32,7 +71,7 @@ def extract_operations_from_openapi(spec: Dict) -> List[ApiOperation]:
         if not isinstance(methods, dict):
             continue
         for method, op in methods.items():
-            if method.lower() not in VALID_METHODS:
+            if method.lower() not in valid_methods:
                 continue
             if not isinstance(op, dict):
                 continue
@@ -52,19 +91,19 @@ def extract_operations_from_openapi(spec: Dict) -> List[ApiOperation]:
 
 
 def manual_operations_input() -> List[ApiOperation]:
-    """API operasyonlarını konsoldan manuel olarak alır."""
+    """Collect API operations from stdin."""
     ops: List[ApiOperation] = []
-    print("\nManuel endpoint girişi. Bitirmek için method kısmını boş bırak.\n")
+    print("\nManuel endpoint girisi. Bitirmek icin method kismini bos birakin.\n")
     idx = 1
     while True:
         method = input(
-            f"[{idx}] HTTP method (GET/POST/PUT/DELETE, boş = bitir): "
+            f"[{idx}] HTTP method (GET/POST/PUT/DELETE, bos = bitir): "
         ).strip().upper()
         if not method:
             break
-        path = input(f"[{idx}] Path (örn: /users, /login): ").strip()
-        summary = input(f"[{idx}] Kısa özet: ").strip()
-        description = input(f"[{idx}] Detay açıklama (opsiyonel): ").strip()
+        path = input(f"[{idx}] Path (orn: /users, /login): ").strip()
+        summary = input(f"[{idx}] Kisa ozet: ").strip()
+        description = input(f"[{idx}] Detay aciklama (opsiyonel): ").strip()
         ops.append(
             ApiOperation(
                 op_id=f"MAN{idx}",
