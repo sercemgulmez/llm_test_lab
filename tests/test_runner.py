@@ -25,6 +25,13 @@ def test_join_url_handles_slashes():
     assert _join_url("https://api.example.com", "/users") == "https://api.example.com/users"
     assert _join_url("https://api.example.com/", "/users") == "https://api.example.com/users"
     assert _join_url("https://api.example.com", "users") == "https://api.example.com/users"
+    assert _join_url("https://api.example.com/v1", "/users") == "https://api.example.com/v1/users"
+    assert _join_url("https://api.example.com/api/web/packages", "/api/web/packages") == (
+        "https://api.example.com/api/web/packages"
+    )
+    assert _join_url("https://api.example.com/api/web/packages", "/api/web/packages?id=42") == (
+        "https://api.example.com/api/web/packages?id=42"
+    )
 
 
 def test_run_testcases_executes_requests_and_sets_pass(monkeypatch):

@@ -1,4 +1,5 @@
 from models import ApiOperation
+from generators.base import BaseGenerator
 from generators.openai_gen import OpenAIGenerator
 from generators.gemini_gen import GeminiGenerator
 from generators.claude_gen import ClaudeGenerator
@@ -103,3 +104,22 @@ def test_claude_generator_uses_mocked_client(monkeypatch):
     assert len(rows) == 1
     assert rows[0]["generator"] == "LLM-Claude-claude-test-basic"
     assert rows[0]["expected_result"] == "OK"
+
+
+def test_non_retryable_quota_errors_do_not_retry():
+    class DummyGenerator(BaseGenerator):
+        def __init__(self):
+            self.calls = 0
+
+        def _generate_for_operation(self, op, variant_name, variant_desc, num_cases):
+            self.calls += 1
+            raise RuntimeError(
+                "Error code: 429 - {'error': {'message': 'You exceeded your current quota', "
+                "'code': 'insufficient_quota'}}"
+            )
+
+    gen = DummyGenerator()
+    rows = gen.generate([_sample_operation()], "basic", "happy path", 1)
+
+    assert rows == []
+    assert gen.calls == 1

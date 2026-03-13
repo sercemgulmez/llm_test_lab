@@ -9,6 +9,20 @@ from models import ApiOperation
 from config import RETRY_MAX_ATTEMPTS, RETRY_BACKOFF_SECONDS
 
 
+_NON_RETRYABLE_ERROR_MARKERS = (
+    "insufficient_quota",
+    "credit balance is too low",
+    "plans & billing",
+    "check your plan and billing",
+)
+
+
+def _is_non_retryable_generation_error(exc: Exception) -> bool:
+    """Kredi/kota gibi tekrar denemeyle düzelmeyecek provider hatalarini ayiklar."""
+    message = str(exc).lower()
+    return any(marker in message for marker in _NON_RETRYABLE_ERROR_MARKERS)
+
+
 def build_llm_prompt(op: ApiOperation, num_cases: int, variant_name: str, variant_desc: str) -> str:
     """Bir API operasyonu için LLM'e gönderilecek prompt'u hazırlar."""
     example_body_section = (
@@ -130,6 +144,9 @@ class BaseGenerator(ABC):
             try:
                 return self._generate_for_operation(op, variant_name, variant_desc, num_cases)
             except Exception as e:
+                if _is_non_retryable_generation_error(e):
+                    print(f"  [HATA] {op.op_id} kalici provider/kredi hatasi: {e}")
+                    break
                 if attempt < RETRY_MAX_ATTEMPTS:
                     wait = RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1))
                     print(
