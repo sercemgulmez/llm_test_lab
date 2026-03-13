@@ -489,7 +489,7 @@ def main() -> None:
         print_summary_table(executed_rows)
 
     print()
-    print(f"Tamamlandi. Ciktilar: {args.output_dir}/")
+    print(f"Tamamlandı. Çıktılar: {args.output_dir}/")
 
 
 if __name__ == "__main__":
