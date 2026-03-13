@@ -1,0 +1,13 @@
+curl 'https://www.turkcell.com.tr/api/web/packages' \
+  -H 'sec-ch-ua-platform: "Windows"' \
+  -H 'Referer: https://www.turkcell.com.tr/paket-ve-tarifeler/faturali-hat' \
+  -H 'User-Redis-SessionId: WEB:RDS:20260310165516_1B76CFDA5905456484D69F90EB010B45' \
+  -H 'sec-ch-ua: "Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"' \
+  -H 'sec-ch-ua-mobile: ?0' \
+  -H 'Language-Prefix: tr' \
+  -H 'App-Channel-Type: WEB' \
+  -H 'Accept: application/json' \
+  -H 'channel: WEB' \
+  -H 'Content-Type: application/json' \
+  -H 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36' \
+  --data-raw '{"newFilterLogic":true,"requestedFilters":[{"filterType":"CATEGORY_FILTER"},{"filterType":"PACKAGE_GROUPS_FILTER"},{"filterType":"PRICES_FILTER"},{"filterType":"VOICE_AMOUNTS_FILTER"},{"filterType":"DATA_AMOUNTS_FILTER"}],"filterMap":{},"paymentType":"POSTPAID"}'
