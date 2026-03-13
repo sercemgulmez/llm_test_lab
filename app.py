@@ -114,7 +114,11 @@ def _execute_pipeline(data: dict) -> dict:
         print(f"{len(operations)} curl operasyonu parse edildi.")
 
     elif source == "openapi":
-        spec = load_openapi_from_url(data["openapi_url"])
+        spec = load_openapi_from_url(
+            data["openapi_url"],
+            headers=extra_headers or None,
+            cookies=cookies or None,
+        )
         operations = extract_operations_from_openapi(spec)
         print(f"{len(operations)} operasyon çıkarıldı.")
 

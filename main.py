@@ -404,7 +404,11 @@ def main() -> None:
             print("HATA: --openapi-url ile birlikte --base-url da verilmeli.", file=sys.stderr)
             sys.exit(1)
         try:
-            spec = load_openapi_from_url(args.openapi_url)
+            spec = load_openapi_from_url(
+                args.openapi_url,
+                headers=extra_headers or None,
+                cookies=cookies or None,
+            )
         except Exception as e:
             print(f"HATA: OpenAPI dokümanı yüklenemedi: {e}", file=sys.stderr)
             sys.exit(1)

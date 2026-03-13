@@ -1,7 +1,18 @@
+import pytest
+
 from generators.base import build_llm_prompt, parse_llm_lines_to_rows
 from generators.traditional import TraditionalGenerator
 from models import ApiOperation
-from parsers.openapi import extract_operations_from_openapi
+from parsers.openapi import extract_operations_from_openapi, load_openapi_from_url
+
+
+class _DummyResponse:
+    def __init__(self, text, content_type="application/json"):
+        self.text = text
+        self.headers = {"Content-Type": content_type}
+
+    def raise_for_status(self):
+        return None
 
 
 def test_extract_operations_from_openapi_filters_valid_methods():
@@ -21,6 +32,49 @@ def test_extract_operations_from_openapi_filters_valid_methods():
     assert ops[0].op_id == "listUsers"
     assert ops[1].op_id == "OP2"
     assert ops[1].method == "POST"
+
+
+def test_load_openapi_from_url_rejects_swagger_ui_html(monkeypatch):
+    def fake_get(*args, **kwargs):
+        return _DummyResponse("<!doctype html><html><body>Swagger UI</body></html>", "text/html")
+
+    monkeypatch.setattr("parsers.openapi.requests.get", fake_get)
+
+    with pytest.raises(ValueError, match="Swagger UI HTML sayfasi geldi"):
+        load_openapi_from_url("https://example.com/swagger")
+
+
+def test_load_openapi_from_url_rejects_non_spec_json(monkeypatch):
+    def fake_get(*args, **kwargs):
+        return _DummyResponse('{"urls":[{"url":"/openapi.json"}]}')
+
+    monkeypatch.setattr("parsers.openapi.requests.get", fake_get)
+
+    with pytest.raises(ValueError, match="'paths' bulunamadi"):
+        load_openapi_from_url("https://example.com/swagger-config")
+
+
+def test_load_openapi_from_url_forwards_headers_and_cookies(monkeypatch):
+    called = {}
+
+    def fake_get(url, **kwargs):
+        called["url"] = url
+        called["kwargs"] = kwargs
+        return _DummyResponse('{"openapi":"3.0.0","paths":{}}')
+
+    monkeypatch.setattr("parsers.openapi.requests.get", fake_get)
+
+    spec = load_openapi_from_url(
+        "https://example.com/openapi.json",
+        headers={"Authorization": "Bearer token"},
+        cookies={"sessionid": "abc"},
+    )
+
+    assert spec["paths"] == {}
+    assert called["url"] == "https://example.com/openapi.json"
+    assert called["kwargs"]["cookies"] == {"sessionid": "abc"}
+    assert called["kwargs"]["headers"]["Authorization"] == "Bearer token"
+    assert "application/json" in called["kwargs"]["headers"]["Accept"]
 
 
 def test_build_llm_prompt_and_parse_lines_round_trip():

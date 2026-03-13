@@ -1,7 +1,7 @@
 """OpenAPI / Swagger document loaders and parsers."""
 
 import json
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import requests
 import yaml
@@ -39,13 +39,21 @@ def _parse_openapi_text(text: str) -> Dict:
     return spec
 
 
-def load_openapi_from_url(url: str) -> Dict:
+def load_openapi_from_url(
+    url: str,
+    headers: Optional[Dict[str, str]] = None,
+    cookies: Optional[Dict[str, str]] = None,
+) -> Dict:
     """Load an OpenAPI / Swagger JSON or YAML document from a URL."""
     print(f"OpenAPI/Swagger yukleniyor: {url}")
+    request_headers = {"Accept": "application/json, application/yaml, text/yaml, */*"}
+    if headers:
+        request_headers.update(headers)
     resp = requests.get(
         url,
         timeout=15,
-        headers={"Accept": "application/json, application/yaml, text/yaml, */*"},
+        headers=request_headers,
+        cookies=cookies,
     )
     resp.raise_for_status()
 
