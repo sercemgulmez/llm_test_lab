@@ -9,7 +9,14 @@ OPENAI_MODELS = [
 
 # Google Gemini modelleri
 GEMINI_MODELS = [
+    "gemini-2.0-flash",
     "gemini-2.5-flash",
+]
+
+# Groq modelleri (ücretsiz tier — 30 RPM)
+GROQ_MODELS = [
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
 ]
 
 # Anthropic Claude modelleri

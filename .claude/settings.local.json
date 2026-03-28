@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(venv/Scripts/python -c \"import main; print\\(''Syntax OK''\\)\")"
+      "Bash(venv/Scripts/python -c \"import main; print\\(''Syntax OK''\\)\")",
+      "Bash(venv/Scripts/python.exe -c \"import app; print\\(''app.py import OK''\\)\")"
     ]
   }
 }

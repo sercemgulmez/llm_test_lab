@@ -87,6 +87,7 @@ def compute_generator_metrics(rows: List[Dict]) -> List[Dict]:
         total = len(gen_rows)
         num_pass = sum(1 for r in gen_rows if r.get("pass") is True)
         num_fail = sum(1 for r in gen_rows if r.get("pass") is False)
+        evaluated_total = num_pass + num_fail
 
         exp_dist: Dict[str, int] = defaultdict(int)
         act_dist: Dict[str, int] = defaultdict(int)
@@ -104,7 +105,7 @@ def compute_generator_metrics(rows: List[Dict]) -> List[Dict]:
             "total_tests": total,
             "pass_count": num_pass,
             "fail_count": num_fail,
-            "pass_rate": round(num_pass / total, 3) if total else "",
+            "pass_rate": round(num_pass / evaluated_total, 3) if evaluated_total else "",
             "total_tokens": total_tokens or "",
             "avg_tokens_per_tc": round(total_tokens / total, 1) if total and total_tokens else "",
             "expected_status_distribution": json.dumps(dict(exp_dist), ensure_ascii=False),

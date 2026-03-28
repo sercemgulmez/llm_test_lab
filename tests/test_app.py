@@ -37,6 +37,15 @@ def test_run_returns_409_when_another_job_is_running():
     assert resp.status_code == 409
 
 
+def test_run_returns_400_for_invalid_json_payload():
+    client = web_app.app.test_client()
+
+    resp = client.post("/run", data="not-json", content_type="application/json")
+
+    assert resp.status_code == 400
+    assert resp.get_json()["error"]
+
+
 def test_result_metrics_and_comparison_endpoints_return_job_data(tmp_path):
     result_file = tmp_path / "results.csv"
     with result_file.open("w", encoding="utf-8", newline="") as fh:

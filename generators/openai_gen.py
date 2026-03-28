@@ -1,4 +1,4 @@
-"""OpenAI (GPT) tabanlı test senaryosu üreticisi."""
+"""OpenAI Chat Completions API ve uyumlu endpoint'ler için test senaryosu üreticisi."""
 
 import os
 from typing import Dict, List
@@ -13,7 +13,11 @@ except ImportError:
 
 
 class OpenAIGenerator(BaseGenerator):
-    """OpenAI Chat Completions API'si ile test senaryosu üretir."""
+    """OpenAI Chat Completions API (ve uyumlu endpoint'ler) ile test senaryosu üretir."""
+
+    _base_url: str | None = None
+    _api_key_env: str = "OPENAI_API_KEY"
+    _provider_label: str = "OpenAI"
 
     def __init__(self, model: str) -> None:
         self.model = model
@@ -22,11 +26,14 @@ class OpenAIGenerator(BaseGenerator):
     def _get_client(self):
         if OpenAI is None:
             raise RuntimeError("'openai' paketi yüklü değil. pip install openai")
-        api_key = os.getenv("OPENAI_API_KEY")
+        api_key = os.getenv(self._api_key_env)
         if not api_key:
-            raise RuntimeError("OPENAI_API_KEY ortam değişkeni tanımlı değil.")
+            raise RuntimeError(f"{self._api_key_env} ortam değişkeni tanımlı değil.")
         if self._client is None:
-            self._client = OpenAI(api_key=api_key)
+            kwargs: dict = {"api_key": api_key}
+            if self._base_url:
+                kwargs["base_url"] = self._base_url
+            self._client = OpenAI(**kwargs)
         return self._client
 
     def _generate_for_operation(
@@ -37,8 +44,8 @@ class OpenAIGenerator(BaseGenerator):
         num_cases: int,
     ) -> List[Dict]:
         client = self._get_client()
-        generator_name = f"LLM-OpenAI-{self.model}-{variant_name}"
-        print(f"[OpenAI - {self.model} - {variant_name}] {op.op_id} ({op.method} {op.path}) üretiliyor...")
+        generator_name = f"LLM-{self._provider_label}-{self.model}-{variant_name}"
+        print(f"[{self._provider_label} - {self.model} - {variant_name}] {op.op_id} ({op.method} {op.path}) üretiliyor...")
 
         prompt = build_llm_prompt(op, num_cases, variant_name, variant_desc)
         max_tokens = min(16384, max(2048, num_cases * 150))

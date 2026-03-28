@@ -11,9 +11,17 @@ __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+.pytest_cache/
+.pytest_local/
 
 # Çıktı dosyaları
 outputs/
+test_tmp/
+pytest-cache-files-*/
+pytest_work/
+pytest_cache_local/
+tmpcase-*/
+pytest_probe/
 
 # IDE
 .vscode/

@@ -27,6 +27,7 @@ load_dotenv()
 
 import config
 from generators.claude_gen import ClaudeGenerator
+from generators.groq_gen import GroqGenerator
 from generators.gemini_gen import GeminiGenerator
 from generators.openai_gen import OpenAIGenerator
 from generators.traditional import TraditionalGenerator
@@ -64,9 +65,9 @@ class _LogCapture:
         self._lock = threading.Lock()
 
     def write(self, text: str):
-        _orig_stdout.write(text)
-        _orig_stdout.flush()
         with self._lock:
+            _orig_stdout.write(text)
+            _orig_stdout.flush()
             self.buf += text
             while "\n" in self.buf:
                 line, self.buf = self.buf.split("\n", 1)
@@ -75,6 +76,26 @@ class _LogCapture:
 
     def flush(self):
         _orig_stdout.flush()
+
+
+def _parse_header_lines(header_lines: list[str]) -> dict[str, str]:
+    """HTTP header satırlarını toleranslı biçimde sözlüğe çevirir."""
+    parsed: dict[str, str] = {}
+    for raw in header_lines:
+        key, sep, value = raw.partition(":")
+        if sep and key.strip():
+            parsed[key.strip()] = value.strip()
+    return parsed
+
+
+def _parse_cookie_string(cookie_str: str) -> dict[str, str]:
+    """Cookie string'ini `name=value; other=value` formatında ayrıştırır."""
+    parsed: dict[str, str] = {}
+    for part in cookie_str.split(";"):
+        key, _, value = part.partition("=")
+        if key.strip():
+            parsed[key.strip()] = value.strip()
+    return parsed
 
 
 # ── Pipeline ─────────────────────────────────────────────────────────────────
@@ -91,23 +112,16 @@ def _execute_pipeline(data: dict) -> dict:
     num_cases = config.normalize_num_cases(data.get("num_cases"))
 
     # Header / Cookie
-    extra_headers: dict = {}
-    for h in data.get("headers", []):
-        k, _, v = h.partition(": ")
-        if k:
-            extra_headers[k.strip()] = v.strip()
-
-    cookies: dict = {}
-    for part in (data.get("cookie") or "").split("; "):
-        k, _, v = part.partition("=")
-        if k.strip():
-            cookies[k.strip()] = v
+    extra_headers = _parse_header_lines(data.get("headers", []))
+    cookies = _parse_cookie_string(data.get("cookie") or "")
 
     # Operasyonlar
     operations = []
 
     if source == "curl":
         curl_path = data.get("curl_file_path", "")
+        if not curl_path:
+            raise ValueError("Curl kaynağı seçildi ama dosya yolu gönderilmedi.")
         with open(curl_path, "r", encoding="utf-8") as f:
             curl_text = f.read()
         parsed_list = parse_curl_collection(curl_text)
@@ -122,16 +136,23 @@ def _execute_pipeline(data: dict) -> dict:
         print(f"{len(operations)} curl operasyonu parse edildi.")
 
     elif source == "openapi":
+        openapi_url = (data.get("openapi_url") or "").strip()
+        if not openapi_url:
+            raise ValueError("OpenAPI kaynağı seçildi ama URL gönderilmedi.")
         spec = load_openapi_from_url(
-            data["openapi_url"],
+            openapi_url,
             headers=extra_headers or None,
             cookies=cookies or None,
         )
         operations = extract_operations_from_openapi(spec)
         print(f"{len(operations)} operasyon çıkarıldı.")
+    else:
+        raise ValueError(f"Desteklenmeyen kaynak türü: {source}")
 
     if not operations:
         raise ValueError("Hiç operasyon bulunamadı.")
+    if not base_url and not no_run:
+        raise ValueError("Testleri çalıştırmak için base URL gereklidir.")
 
     os.makedirs(output_dir, exist_ok=True)
     save_operations_csv(operations, output_dir)
@@ -173,6 +194,10 @@ def _execute_pipeline(data: dict) -> dict:
     for m in config.CLAUDE_MODELS:
         if not selected_keys or f"claude:{m}" in selected_keys:
             _run_llm(ClaudeGenerator(m), m, "Claude")
+
+    for m in config.GROQ_MODELS:
+        if not selected_keys or f"groq:{m}" in selected_keys:
+            _run_llm(GroqGenerator(m), m, "Groq")
 
     print(f"\nToplam {len(all_rows)} test senaryosu üretildi.")
 
@@ -225,6 +250,11 @@ def _job_thread(job_id: str, data: dict):
         sys.stdout = orig
         _running.clear()
         q.put(None)  # sentinel — SSE akışını bitirir
+        # Bellek sızıntısını önlemek için eski işleri temizle (son 20 iş tutulur)
+        with _jobs_lock:
+            completed = [jid for jid, j in _jobs.items() if j["status"] != "running"]
+            for old_id in completed[:-20]:
+                del _jobs[old_id]
 
 
 # ── Flask route'ları ─────────────────────────────────────────────────────────
@@ -236,6 +266,7 @@ def index():
         openai_models=config.OPENAI_MODELS,
         gemini_models=config.GEMINI_MODELS,
         claude_models=config.CLAUDE_MODELS,
+        groq_models=config.GROQ_MODELS,
         default_output=config.OUTPUT_DIR,
         default_num_cases=config.NUM_CASES_PER_OPERATION,
         max_cases=config.MAX_CASES_PER_OPERATION,
@@ -258,7 +289,9 @@ def run_job():
     if _running.is_set():
         return jsonify({"error": "Zaten bir iş çalışıyor. Lütfen tamamlanmasını bekleyin."}), 409
 
-    data = request.get_json()
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "Geçerli bir JSON payload gönderilmedi."}), 400
     job_id = uuid.uuid4().hex[:8]
 
     with _jobs_lock:

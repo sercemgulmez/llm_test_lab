@@ -74,3 +74,19 @@ def test_build_comparison_summary_exposes_complex_and_semantic_signals():
     assert summary["complex_matrix"]["pairwise_similarity"]["A"]["B"] >= 0.0
     assert summary["generator_rankings"][0]["diversity_score"] >= 0.0
     assert summary["operation_comparison"][0]["generator_stats"]["A"]["total"] >= 1
+
+
+def test_compute_generator_metrics_leaves_pass_rate_empty_when_not_executed():
+    metrics = compute_generator_metrics([
+        {
+            "generator": "A",
+            "expected_status": 200,
+            "actual_status": "",
+            "pass": None,
+        }
+    ])
+
+    assert metrics[0]["total_tests"] == 1
+    assert metrics[0]["pass_count"] == 0
+    assert metrics[0]["fail_count"] == 0
+    assert metrics[0]["pass_rate"] == ""

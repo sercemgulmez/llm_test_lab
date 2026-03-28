@@ -20,6 +20,7 @@ from generators.traditional import TraditionalGenerator
 from generators.openai_gen import OpenAIGenerator
 from generators.gemini_gen import GeminiGenerator
 from generators.claude_gen import ClaudeGenerator
+from generators.groq_gen import GroqGenerator
 from runner import run_testcases
 from reporters.csv_reporter import (
     save_operations_csv,
@@ -204,6 +205,9 @@ def interactive_wizard() -> argparse.Namespace:
     for m in config.CLAUDE_MODELS:
         gen_options.append(f"Anthropic Claude  {m}")
         gen_keys.append(f"claude:{m}")
+    for m in config.GROQ_MODELS:
+        gen_options.append(f"Groq              {m}")
+        gen_keys.append(f"groq:{m}")
 
     selected_indices = _wms("Generator seçin", gen_options)
     selected_keys = [gen_keys[i] for i in selected_indices]
@@ -302,9 +306,16 @@ def parse_args() -> argparse.Namespace:
         "--output-dir", metavar="DIR",
         default=config.OUTPUT_DIR,
     )
+    parser.add_argument(
+        "--num-cases",
+        metavar="N",
+        type=int,
+        default=config.NUM_CASES_PER_OPERATION,
+        help="Her operasyon için üretilecek testcase sayısı.",
+    )
     ns = parser.parse_args()
     ns.selected_generators = None  # Tümünü kullan
-    ns.num_cases = config.NUM_CASES_PER_OPERATION
+    ns.num_cases = config.normalize_num_cases(ns.num_cases)
     return ns
 
 
@@ -313,7 +324,7 @@ def parse_args() -> argparse.Namespace:
 def _build_llm_generators(selected_keys: list = None) -> list:
     """
     LLM generator tuple listesi döner: (instance, variant_name, variant_desc)
-    selected_keys: ["openai:gpt-4.1-mini", "gemini:...", "claude:..."]
+    selected_keys: ["openai:gpt-4.1-mini", "gemini:...", "claude:...", "groq:..."]
                    None ise tümü dahil edilir.
     """
     def _include(key: str) -> bool:
@@ -332,24 +343,28 @@ def _build_llm_generators(selected_keys: list = None) -> list:
         if _include(f"claude:{model}"):
             for v_name, v_desc in config.PROMPT_VARIANTS.items():
                 generators.append((ClaudeGenerator(model), v_name, v_desc))
+    for model in config.GROQ_MODELS:
+        if _include(f"groq:{model}"):
+            for v_name, v_desc in config.PROMPT_VARIANTS.items():
+                generators.append((GroqGenerator(model), v_name, v_desc))
     return generators
 
 
 def _parse_cli_headers(header_list: list) -> dict:
     result = {}
     for h in header_list:
-        key, _, value = h.partition(": ")
-        if key:
+        key, sep, value = h.partition(":")
+        if sep and key.strip():
             result[key.strip()] = value.strip()
     return result
 
 
 def _parse_cli_cookies(cookie_str: str) -> dict:
     result = {}
-    for part in cookie_str.split("; "):
+    for part in cookie_str.split(";"):
         k, _, v = part.partition("=")
-        if k:
-            result[k.strip()] = v
+        if k.strip():
+            result[k.strip()] = v.strip()
     return result
 
 
@@ -445,8 +460,9 @@ def main() -> None:
     # Geleneksel şablon
     if selected_keys is None or "traditional" in selected_keys:
         trad_gen = TraditionalGenerator()
-        all_rows.extend(trad_gen.generate(operations, "", "", 0))
-        print(f"  [Geleneksel] {len(all_rows)} senaryo üretildi.")
+        trad_rows = trad_gen.generate(operations, "", "", 0)
+        all_rows.extend(trad_rows)
+        print(f"  [Geleneksel] {len(trad_rows)} senaryo üretildi.")
 
     # LLM tabanlı generator'lar
     for gen_instance, v_name, v_desc in _build_llm_generators(selected_keys):

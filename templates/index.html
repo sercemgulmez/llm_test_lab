@@ -171,6 +171,7 @@
     .tag-openai { background: #10a37f22; color: #10a37f; }
     .tag-gemini { background: #4285f422; color: #4285f4; }
     .tag-claude { background: #d97b4222; color: var(--orange); }
+    .tag-groq   { background: #f5503622; color: #f55036; }
 
     /* ── Slider ──────────────────────────────────────────── */
     input[type="range"] {
@@ -520,6 +521,13 @@
           <input type="checkbox" value="claude:{{ m }}" checked />
           <span class="gen-name">{{ m }}</span>
           <span class="tag tag-claude">Claude</span>
+        </label>
+        {% endfor %}
+        {% for m in groq_models %}
+        <label class="gen-item">
+          <input type="checkbox" value="groq:{{ m }}" checked />
+          <span class="gen-name">{{ m }}</span>
+          <span class="tag tag-groq">Groq</span>
         </label>
         {% endfor %}
       </div>
@@ -1034,6 +1042,7 @@
     if (n.includes("openai"))      return "#10a37f";
     if (n.includes("gemini"))      return "#4285f4";
     if (n.includes("claude"))      return "#d97b42";
+    if (n.includes("groq"))        return "#f55036";
     return ["#58a6ff", "#bc8cff", "#f85149", "#d29922"][(name || "").charCodeAt(0) % 4];
   }
 
