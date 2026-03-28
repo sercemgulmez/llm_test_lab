@@ -247,7 +247,7 @@ def interactive_wizard() -> argparse.Namespace:
     for i in selected_indices:
         print(f"               - {gen_options[i].strip()}")
     print(f"  Senaryo/op   : {num_cases}")
-    print(f"  Test çalıştır: {'Hayir' if no_run else 'Evet'}")
+    print(f"  Test çalıştır: {'Hayır' if no_run else 'Evet'}")
     print(f"  Çıktı        : {output_dir}/")
     print("=" * 60)
     print()

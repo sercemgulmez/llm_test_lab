@@ -41,10 +41,17 @@ class OpenAIGenerator(BaseGenerator):
         print(f"[OpenAI - {self.model} - {variant_name}] {op.op_id} ({op.method} {op.path}) üretiliyor...")
 
         prompt = build_llm_prompt(op, num_cases, variant_name, variant_desc)
+        max_tokens = min(16384, max(2048, num_cases * 150))
         resp = client.chat.completions.create(
             model=self.model,
+            max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
         )
         text: str = resp.choices[0].message.content or ""
         lines = [l.strip() for l in text.splitlines() if l.strip()]
-        return parse_llm_lines_to_rows(lines, op, generator_name)
+        rows = parse_llm_lines_to_rows(lines, op, generator_name)
+        if resp.usage:
+            total_tokens = resp.usage.total_tokens
+            for row in rows:
+                row["tokens_used"] = total_tokens
+        return rows

@@ -101,17 +101,17 @@ def extract_operations_from_openapi(spec: Dict) -> List[ApiOperation]:
 def manual_operations_input() -> List[ApiOperation]:
     """Collect API operations from stdin."""
     ops: List[ApiOperation] = []
-    print("\nManuel endpoint girisi. Bitirmek icin method kismini bos birakin.\n")
+    print("\nManuel endpoint girişi. Bitirmek için method kısmını boş bırakın.\n")
     idx = 1
     while True:
         method = input(
-            f"[{idx}] HTTP method (GET/POST/PUT/DELETE, bos = bitir): "
+            f"[{idx}] HTTP method (GET/POST/PUT/DELETE, boş = bitir): "
         ).strip().upper()
         if not method:
             break
-        path = input(f"[{idx}] Path (orn: /users, /login): ").strip()
-        summary = input(f"[{idx}] Kisa ozet: ").strip()
-        description = input(f"[{idx}] Detay aciklama (opsiyonel): ").strip()
+        path = input(f"[{idx}] Path (örn: /users, /login): ").strip()
+        summary = input(f"[{idx}] Kısa özet: ").strip()
+        description = input(f"[{idx}] Detay açıklama (opsiyonel): ").strip()
         ops.append(
             ApiOperation(
                 op_id=f"MAN{idx}",

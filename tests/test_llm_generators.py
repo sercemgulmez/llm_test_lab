@@ -17,9 +17,10 @@ def _sample_operation():
 
 def test_openai_generator_uses_mocked_client(monkeypatch):
     class DummyCompletions:
-        def create(self, model, messages):
+        def create(self, model, messages, max_tokens=None):
             assert model == "gpt-test"
             assert messages[0]["role"] == "user"
+            assert isinstance(max_tokens, int) and max_tokens >= 2048
             return type(
                 "Resp",
                 (),
@@ -30,7 +31,8 @@ def test_openai_generator_uses_mocked_client(monkeypatch):
                             (),
                             {"message": type("Msg", (), {"content": 'LOGIN_TC1|Valid|POST /login|{"email":"a"}|200|OK'})()},
                         )()
-                    ]
+                    ],
+                    "usage": type("Usage", (), {"total_tokens": 350})(),
                 },
             )()
 
@@ -47,6 +49,7 @@ def test_openai_generator_uses_mocked_client(monkeypatch):
     assert len(rows) == 1
     assert rows[0]["generator"] == "LLM-OpenAI-gpt-test-basic"
     assert rows[0]["expected_status"] == 200
+    assert rows[0]["tokens_used"] == 350
 
 
 def test_gemini_generator_uses_mocked_client(monkeypatch):
@@ -78,13 +81,14 @@ def test_claude_generator_uses_mocked_client(monkeypatch):
     class DummyMessages:
         def create(self, model, max_tokens, messages):
             assert model == "claude-test"
-            assert max_tokens == 2048
+            assert isinstance(max_tokens, int) and max_tokens >= 2048
             assert messages[0]["role"] == "user"
             return type(
                 "Resp",
                 (),
                 {
-                    "content": [type("Block", (), {"text": 'LOGIN_TC1|Valid|POST /login|-|200|OK'})()]
+                    "content": [type("Block", (), {"text": 'LOGIN_TC1|Valid|POST /login|-|200|OK'})()],
+                    "usage": type("Usage", (), {"input_tokens": 200, "output_tokens": 50})(),
                 },
             )()
 
@@ -104,6 +108,7 @@ def test_claude_generator_uses_mocked_client(monkeypatch):
     assert len(rows) == 1
     assert rows[0]["generator"] == "LLM-Claude-claude-test-basic"
     assert rows[0]["expected_result"] == "OK"
+    assert rows[0]["tokens_used"] == 250  # 200 input + 50 output
 
 
 def test_non_retryable_quota_errors_do_not_retry():

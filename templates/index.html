@@ -817,6 +817,28 @@
             <div class="metric-sub">${m.pass_count} geçti · ${m.fail_count} başarısız · ${m.total_tests} toplam</div>
           </div>`;
       }
+      // Token kullanım kartları — comparisonData.generator_rankings üzerinden
+      const rankingsWithTokens = (comparisonData?.generator_rankings || [])
+        .filter(r => r.total_tokens !== "" && r.total_tokens != null && parseInt(r.total_tokens) > 0);
+      if (rankingsWithTokens.length > 0) {
+        const totalTok = rankingsWithTokens.reduce((s, r) => s + (parseInt(r.total_tokens) || 0), 0);
+        const bestEff  = [...rankingsWithTokens]
+          .sort((a, b) => parseFloat(a.avg_tokens_per_tc) - parseFloat(b.avg_tokens_per_tc))[0];
+        html += `
+          <div class="metric-card">
+            <div class="metric-label">Toplam Token</div>
+            <div class="metric-val" style="color:var(--purple)">${totalTok.toLocaleString()}</div>
+            <div class="metric-sub">Tüm LLM API çağrıları</div>
+          </div>`;
+        if (bestEff) {
+          html += `
+            <div class="metric-card">
+              <div class="metric-label">En Verimli Generator</div>
+              <div class="metric-val" style="font-size:0.9rem;color:var(--purple)">${escHtml(shortLabel(bestEff.generator))}</div>
+              <div class="metric-sub">${bestEff.avg_tokens_per_tc} token / testcase</div>
+            </div>`;
+        }
+      }
       html += `</div>`;
     }
 
@@ -826,19 +848,27 @@
         const rate = item.pass_rate !== "" ? (parseFloat(item.pass_rate) * 100).toFixed(1) + "%" : "N/A";
         const rateColor = parseFloat(item.pass_rate) >= 0.7 ? "var(--green)"
                         : parseFloat(item.pass_rate) >= 0.4 ? "var(--yellow)" : "var(--red)";
+        const tokTxt = (item.total_tokens !== "" && item.total_tokens != null && parseInt(item.total_tokens) > 0)
+          ? `${parseInt(item.total_tokens).toLocaleString()} tok · ${item.avg_tokens_per_tc}/TC`
+          : "–";
         html += `
           <div class="leader-row">
             <div>
               <div class="leader-name">${escHtml(item.generator)}</div>
-              <div class="leader-meta">${item.total_tests} testcase · matrix skor ${formatNumber(item.matrix_score, 4)}</div>
+              <div class="leader-meta">${item.total_tests} testcase · spektral ${formatNumber(item.matrix_score, 4)}</div>
             </div>
-            <div class="leader-meta">${item.pass_count} geçti · ${item.fail_count} başarısız</div>
-            <div class="leader-meta">cesitlilik ${formatNumber(item.diversity_score, 3)} | ic benzerlik ${formatNumber(item.intra_similarity, 3)}</div>
+            <div>
+              <div class="leader-meta">${item.pass_count} geçti · ${item.fail_count} başarısız</div>
+              <div class="leader-meta" style="color:var(--purple)">🔋 ${tokTxt}</div>
+            </div>
+            <div class="leader-meta">çeşitlilik ${formatNumber(item.diversity_score, 3)} | iç benzerlik ${formatNumber(item.intra_similarity, 3)}</div>
             <div class="leader-rate" style="color:${rateColor}">${rate}</div>
           </div>`;
       }
       html += `</div>`;
     }
+
+    html += renderComparisonCharts(comparisonData);
 
     if (comparisonData?.operation_comparison?.length) {
       html += `<div class="section-title">Operasyon Bazlı Karşılaştırma</div>`;
@@ -869,7 +899,7 @@
 
     if (comparisonData?.complex_matrix?.labels?.length) {
       const labels = comparisonData.complex_matrix.labels;
-      html += `<div class="section-title">Kompleks KarÅŸÄ±laÅŸtÄ±rma Matrisi</div>`;
+      html += `<div class="section-title">Kompleks Karşılaştırma Matrisi</div>`;
       html += `<div class="helper-text">Hermitian pairwise matris: |z| göreli üstünlüğü, faz ise dengesizlik yönünü temsil eder. Generator sırası spektral skordan türetilir.</div>`;
       html += `<div class="comparison-wrap"><table class="matrix-table"><thead><tr><th>Generator</th><th>Spektral Skor</th><th>Faz</th>`;
       for (const label of labels) {
@@ -895,7 +925,7 @@
     if (comparisonData?.complex_matrix?.labels?.length) {
       const labels = comparisonData.complex_matrix.labels;
       html += `<div class="section-title">Pairwise Similarity</div>`;
-      html += `<div class="helper-text">Bu tablo generatorlar arasi testcase benzerligini Jaccard tabanli yakinlik olarak gosterir. Dusuk deger daha yuksek yenilik anlamina gelir.</div>`;
+      html += `<div class="helper-text">Bu tablo generatörler arası test senaryosu benzerliğini Jaccard tabanlı yakınlık olarak gösterir. Düşük değer daha yüksek yenilik anlamına gelir.</div>`;
       html += `<div class="comparison-wrap"><table class="matrix-table"><thead><tr><th>Generator</th>`;
       for (const label of labels) {
         html += `<th>${escHtml(shortLabel(label))}</th>`;
@@ -919,6 +949,12 @@
 
     // Filter bar
     if (tableData.rows && tableData.rows.length > 0) {
+      const genColIdx = tableData.headers.indexOf("generator");
+      const uniqueGens = genColIdx >= 0
+        ? [...new Set(tableData.rows.map(r => r[genColIdx]).filter(Boolean))].sort()
+        : [];
+      const genOptions = uniqueGens.map(g =>
+        `<option value="${escHtml(g)}">${escHtml(shortLabel(g))}</option>`).join("");
       html += `
         <div class="filter-bar">
           <input type="text" id="filter-text" placeholder="🔍 Ara..." oninput="filterTable()" />
@@ -926,6 +962,10 @@
             <option value="">Tüm sonuçlar</option>
             <option value="True">✓ Geçti</option>
             <option value="False">✗ Başarısız</option>
+          </select>
+          <select id="filter-gen" onchange="filterTable()">
+            <option value="">Tüm generatorlar</option>
+            ${genOptions}
           </select>
         </div>`;
 
@@ -939,12 +979,14 @@
 
       const passIdx   = tableData.headers.indexOf("pass");
       const statusIdx = tableData.headers.indexOf("actual_status");
+      const tokIdx    = tableData.headers.indexOf("tokens_used");
 
       for (const row of tableData.rows) {
         html += `<tr>`;
         for (let i = 0; i < row.length; i++) {
           const cell = row[i] || "";
           let cls = "cell-wrap";
+          let style = "";
           if (i === passIdx) {
             cls = cell === "True" ? "cell-pass" : (cell === "False" ? "cell-fail" : "");
           } else if (i === statusIdx) {
@@ -952,8 +994,10 @@
             if (code >= 200 && code < 300) cls = "cell-code-2xx";
             else if (code >= 400 && code < 500) cls = "cell-code-4xx";
             else if (code >= 500) cls = "cell-code-5xx";
+          } else if (i === tokIdx && cell) {
+            style = ` style="color:var(--purple)"`;
           }
-          html += `<td class="${cls}" title="${escHtml(cell)}">${escHtml(cell)}</td>`;
+          html += `<td class="${cls}"${style} title="${escHtml(cell)}">${escHtml(cell)}</td>`;
         }
         html += `</tr>`;
       }
@@ -968,16 +1012,161 @@
   function filterTable() {
     const q    = (document.getElementById("filter-text")?.value || "").toLowerCase();
     const pass = document.getElementById("filter-pass")?.value || "";
+    const gen  = document.getElementById("filter-gen")?.value || "";
     const rows = document.querySelectorAll("#result-table tbody tr");
     const headers = [...document.querySelectorAll("#result-table thead th")].map(th => th.textContent);
     const passIdx = headers.indexOf("pass");
+    const genIdx  = headers.indexOf("generator");
     rows.forEach(tr => {
-      const text = tr.textContent.toLowerCase();
+      const text     = tr.textContent.toLowerCase();
       const passCell = passIdx >= 0 ? (tr.children[passIdx]?.textContent || "") : "";
-      const textOk = !q || text.includes(q);
+      const genCell  = genIdx  >= 0 ? (tr.children[genIdx]?.textContent  || "") : "";
+      const textOk = !q    || text.includes(q);
       const passOk = !pass || passCell === pass;
-      tr.style.display = textOk && passOk ? "" : "none";
+      const genOk  = !gen  || genCell  === gen;
+      tr.style.display = textOk && passOk && genOk ? "" : "none";
     });
+  }
+
+  function genColor(name) {
+    const n = (name || "").toLowerCase();
+    if (n.includes("traditional")) return "#8b949e";
+    if (n.includes("openai"))      return "#10a37f";
+    if (n.includes("gemini"))      return "#4285f4";
+    if (n.includes("claude"))      return "#d97b42";
+    return ["#58a6ff", "#bc8cff", "#f85149", "#d29922"][(name || "").charCodeAt(0) % 4];
+  }
+
+  function renderComparisonCharts(comparisonData) {
+    const rankings = comparisonData?.generator_rankings || [];
+    if (rankings.length < 1) return "";
+
+    const maxSpectral = Math.max(...rankings.map(r => r.matrix_score || 0)) || 1;
+    const tokenVals   = rankings.map(r => parseFloat(r.avg_tokens_per_tc) || 0).filter(v => v > 0);
+    const maxTokens   = Math.max(...tokenVals) || 1;
+
+    const dims = [
+      { label: "Pass Rate",  fn: r => r.pass_rate !== "" ? Math.min(1, parseFloat(r.pass_rate)) : 0 },
+      { label: "Çeşitlilik", fn: r => Math.min(1, r.diversity_score || 0) },
+      { label: "Tok Verimi", fn: r => {
+          const v = parseFloat(r.avg_tokens_per_tc);
+          return v > 0 ? 1 - Math.min(1, v / maxTokens) : 1.0;
+        }
+      },
+      { label: "Spektral",   fn: r => maxSpectral > 0 ? Math.min(1, (r.matrix_score || 0) / maxSpectral) : 0 },
+      { label: "Op Kapsam",  fn: r => Math.min(1, r.operation_coverage || 0) },
+    ];
+    const N = dims.length;
+    const CX = 170, CY = 155, R = 108;
+    const angles = dims.map((_, i) => -Math.PI / 2 + (2 * Math.PI * i) / N);
+
+    // ── Radar SVG ──────────────────────────────────────────────────
+    let radar = `<svg viewBox="0 0 340 308" style="width:100%;max-width:360px">`;
+    for (const f of [0.25, 0.5, 0.75, 1.0]) {
+      const pts = angles.map(a =>
+        `${(CX + R * f * Math.cos(a)).toFixed(1)},${(CY + R * f * Math.sin(a)).toFixed(1)}`
+      ).join(" ");
+      radar += `<polygon points="${pts}" fill="none" stroke="#30363d" stroke-width="${f === 1 ? 1.5 : 0.6}"/>`;
+      if (f < 1) {
+        const tx = (CX + R * f * Math.cos(angles[0]) + 4).toFixed(1);
+        const ty = (CY + R * f * Math.sin(angles[0])).toFixed(1);
+        radar += `<text x="${tx}" y="${ty}" font-size="8" fill="#484f58">${(f * 100).toFixed(0)}%</text>`;
+      }
+    }
+    for (let i = 0; i < N; i++) {
+      const ex = (CX + R * Math.cos(angles[i])).toFixed(1);
+      const ey = (CY + R * Math.sin(angles[i])).toFixed(1);
+      radar += `<line x1="${CX}" y1="${CY}" x2="${ex}" y2="${ey}" stroke="#30363d" stroke-width="1"/>`;
+      const lx = CX + (R + 22) * Math.cos(angles[i]);
+      const ly = CY + (R + 22) * Math.sin(angles[i]);
+      const anchor = lx < CX - 4 ? "end" : lx > CX + 4 ? "start" : "middle";
+      radar += `<text x="${lx.toFixed(1)}" y="${(ly + 4).toFixed(1)}" text-anchor="${anchor}" font-size="10" fill="#8b949e" font-family="-apple-system,sans-serif">${dims[i].label}</text>`;
+    }
+    for (const r of rankings) {
+      const color = genColor(r.generator);
+      const pts = dims.map((d, i) => {
+        const val = Math.min(1, Math.max(0, d.fn(r)));
+        return `${(CX + R * val * Math.cos(angles[i])).toFixed(1)},${(CY + R * val * Math.sin(angles[i])).toFixed(1)}`;
+      }).join(" ");
+      radar += `<polygon points="${pts}" fill="${color}28" stroke="${color}" stroke-width="2"/>`;
+      dims.forEach((d, i) => {
+        const val = Math.min(1, Math.max(0, d.fn(r)));
+        const px = (CX + R * val * Math.cos(angles[i])).toFixed(1);
+        const py = (CY + R * val * Math.sin(angles[i])).toFixed(1);
+        radar += `<circle cx="${px}" cy="${py}" r="3.5" fill="${color}" stroke="#0d1117" stroke-width="1.5"/>`;
+      });
+    }
+    radar += `</svg>`;
+
+    let legend = `<div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:6px">`;
+    for (const r of rankings) {
+      const color = genColor(r.generator);
+      legend += `<span style="display:inline-flex;align-items:center;gap:5px;font-size:0.73rem">` +
+        `<span style="width:11px;height:11px;border-radius:3px;background:${color};flex-shrink:0;display:inline-block"></span>` +
+        `<span style="color:var(--muted)">${escHtml(shortLabel(r.generator))}</span></span>`;
+    }
+    legend += `</div>`;
+
+    // ── Pass Rate bar chart ─────────────────────────────────────────
+    const LW = 116, CW = 180, BH = 18, GAP = 7, PT = 22;
+    const SVG_W = LW + CW + 46;
+
+    let passBar = `<svg viewBox="0 0 ${SVG_W} ${PT + rankings.length * (BH + GAP)}" style="width:100%;max-width:${SVG_W}px">`;
+    passBar += `<text x="${LW}" y="13" font-size="9" fill="#8b949e" letter-spacing="0.05em">PASS RATE KARŞILAŞTIRMA</text>`;
+    for (const f of [0, 0.25, 0.5, 0.75, 1.0]) {
+      const x = (LW + f * CW).toFixed(1);
+      const dash = f > 0 && f < 1 ? ' stroke-dasharray="3,3"' : '';
+      passBar += `<line x1="${x}" y1="${PT - 2}" x2="${x}" y2="${PT + rankings.length * (BH + GAP)}" stroke="#30363d" stroke-width="${f === 0 || f === 1 ? 1.2 : 0.5}"${dash}/>`;
+      if (f > 0) passBar += `<text x="${x}" y="13" text-anchor="middle" font-size="8" fill="#484f58">${(f * 100).toFixed(0)}%</text>`;
+    }
+    for (let i = 0; i < rankings.length; i++) {
+      const r = rankings[i];
+      const y = PT + i * (BH + GAP);
+      const rate = r.pass_rate !== "" ? Math.min(1, parseFloat(r.pass_rate)) : 0;
+      const color = genColor(r.generator);
+      const bw = (rate * CW).toFixed(1);
+      const lbl = r.generator.length > 18 ? r.generator.slice(0, 18) + "…" : r.generator;
+      passBar += `<text x="${LW - 4}" y="${y + BH / 2 + 4}" text-anchor="end" font-size="10" fill="#c9d1d9" font-family="-apple-system,sans-serif">${lbl}</text>`;
+      passBar += `<rect x="${LW}" y="${y}" width="${CW}" height="${BH}" fill="#21262d" rx="3"/>`;
+      if (rate > 0) passBar += `<rect x="${LW}" y="${y}" width="${bw}" height="${BH}" fill="${color}" rx="3" opacity="0.9"/>`;
+      const pct = r.pass_rate !== "" ? (parseFloat(r.pass_rate) * 100).toFixed(1) + "%" : "N/A";
+      passBar += `<text x="${LW + parseFloat(bw) + 5}" y="${y + BH / 2 + 4}" font-size="10" fill="${color}" font-weight="600" font-family="-apple-system,sans-serif">${pct}</text>`;
+    }
+    passBar += `</svg>`;
+
+    // ── Token / TC bar chart ────────────────────────────────────────
+    const tokRank = rankings.filter(r => r.avg_tokens_per_tc !== "" && r.avg_tokens_per_tc != null && parseFloat(r.avg_tokens_per_tc) > 0);
+    let tokenBar = "";
+    if (tokRank.length > 0) {
+      const maxTok = Math.max(...tokRank.map(r => parseFloat(r.avg_tokens_per_tc)));
+      const tkH = PT + tokRank.length * (BH + GAP);
+      let tk = `<svg viewBox="0 0 ${SVG_W} ${tkH}" style="width:100%;max-width:${SVG_W}px">`;
+      tk += `<text x="${LW}" y="13" font-size="9" fill="#8b949e" letter-spacing="0.05em">TOKEN / TESTCASE (az = verimli)</text>`;
+      tk += `<line x1="${LW}" y1="${PT - 2}" x2="${LW}" y2="${tkH}" stroke="#30363d" stroke-width="1.2"/>`;
+      tk += `<text x="${(LW + CW).toFixed(1)}" y="13" text-anchor="end" font-size="8" fill="#484f58">${maxTok.toFixed(0)} tok</text>`;
+      for (let i = 0; i < tokRank.length; i++) {
+        const r = tokRank[i];
+        const y = PT + i * (BH + GAP);
+        const val = parseFloat(r.avg_tokens_per_tc);
+        const color = genColor(r.generator);
+        const bw = ((val / maxTok) * CW).toFixed(1);
+        const lbl = r.generator.length > 18 ? r.generator.slice(0, 18) + "…" : r.generator;
+        tk += `<text x="${LW - 4}" y="${y + BH / 2 + 4}" text-anchor="end" font-size="10" fill="#c9d1d9" font-family="-apple-system,sans-serif">${lbl}</text>`;
+        tk += `<rect x="${LW}" y="${y}" width="${CW}" height="${BH}" fill="#21262d" rx="3"/>`;
+        tk += `<rect x="${LW}" y="${y}" width="${bw}" height="${BH}" fill="${color}" rx="3" opacity="0.9"/>`;
+        tk += `<text x="${LW + parseFloat(bw) + 5}" y="${y + BH / 2 + 4}" font-size="10" fill="${color}" font-weight="600" font-family="-apple-system,sans-serif">${val.toFixed(0)}</text>`;
+      }
+      tk += `</svg>`;
+      tokenBar = tk;
+    }
+
+    return `
+      <div class="section-title">Çok Boyutlu Karşılaştırma Grafiği</div>
+      <div class="helper-text">Radar: 5 boyut — Pass Rate · Çeşitlilik · Token Verimliliği · Spektral Skor · Operasyon Kapsamı. Dışa çıkmak daha iyiyi gösterir.</div>
+      <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:20px">
+        <div style="flex:0 0 auto">${radar}${legend}</div>
+        <div style="flex:1;min-width:260px;display:flex;flex-direction:column;gap:18px">${passBar}${tokenBar}</div>
+      </div>`;
   }
 
   function formatNumber(value, digits = 3) {

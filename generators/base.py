@@ -1,12 +1,14 @@
 """Tüm generator'lar için soyut temel sınıf ve ortak yardımcılar."""
 
 import json
+import re
 import time
 from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional
 
 from models import ApiOperation
-from config import RETRY_MAX_ATTEMPTS, RETRY_BACKOFF_SECONDS
+from config import MAX_PARALLEL_WORKERS, RETRY_MAX_ATTEMPTS, RETRY_BACKOFF_SECONDS
 
 
 _NON_RETRYABLE_ERROR_MARKERS = (
@@ -14,7 +16,17 @@ _NON_RETRYABLE_ERROR_MARKERS = (
     "credit balance is too low",
     "plans & billing",
     "check your plan and billing",
+    # OpenAI kimlik doğrulama hataları
+    "incorrect api key",
+    "invalid api key",
+    "no api key provided",
+    # Anthropic kimlik doğrulama hataları
+    "invalid x-api-key",
+    "authentication_error",
 )
+
+# LLM'in satır başına eklediği numara / madde işareti öneklerini temizler
+_LIST_PREFIX_RE = re.compile(r"^\s*(?:\d+[.)]\s+|[-*•]\s+)")
 
 
 def _is_non_retryable_generation_error(exc: Exception) -> bool:
@@ -24,45 +36,32 @@ def _is_non_retryable_generation_error(exc: Exception) -> bool:
 
 
 def build_llm_prompt(op: ApiOperation, num_cases: int, variant_name: str, variant_desc: str) -> str:
-    """Bir API operasyonu için LLM'e gönderilecek prompt'u hazırlar."""
-    example_body_section = (
-        f"\nÖrnek Request Body:\n{op.example_body}\n"
-        if op.example_body else ""
-    )
-    return f"""
-Kıdemli bir Backend QA mühendisi gibi davran.
-Aşağıdaki API operasyonu için fonksiyonel test senaryoları üret.
+    """Bir API operasyonu için LLM'e gönderilecek token-optimized prompt."""
+    extra_parts = []
+    if op.description:
+        extra_parts.append(op.description)
+    if op.example_body:
+        extra_parts.append(f"Örnek body: {op.example_body}")
+    extra_section = ("\n" + "\n".join(extra_parts)) if extra_parts else ""
 
-Operasyon ID: {op.op_id}
-HTTP Method: {op.method}
-Path: {op.path}
-Özet: {op.summary}
-Açıklama: {op.description}{example_body_section}
-Test stratejisi (varyant):
-- {variant_name}: {variant_desc}
+    return f"""Kıdemli Backend QA mühendisi olarak aşağıdaki API operasyonu için TAM OLARAK {num_cases} test senaryosu üret.
 
-Her test senaryosu için:
-- Gerçekçi bir istek örneği kurgula (query parametreleri / JSON body vb.).
-- Beklenen HTTP durum kodunu belirt.
-- Senaryonun amacını kısa şekilde özetle.
+Operasyon: {op.op_id} | {op.method} {op.path} | {op.summary}{extra_section}
+Strateji: [{variant_name}] {variant_desc}
 
-ÇIKTI FORMATIN:
-Her test tek satır olacak ve şu formatta yazılacak (aralarda | karakteri):
-
-TC_ID|Kısa Başlık|HTTP_METHOD PATH|Request JSON Body (yoksa - yaz)|Beklenen HTTP Status Kodu (sayı)|Beklenen Sonuç (kısa açıklama)
+FORMAT (her satır tam 6 pipe-ayrımlı alan):
+TC_ID|Başlık|METHOD PATH|JSON_body veya -|HTTP_kodu|Beklenen_sonuç
 
 ÖRNEK:
-{op.op_id}_TC1|Başarılı giriş|POST /login|{{"phone":"+905xxxxxxxxx","password":"GecerliSifre1"}}|200|Kullanıcı başarıyla giriş yapar ve token döner
+{op.op_id}_TC1|Başarılı istek|{op.method} {op.path}|-|200|İşlem başarıyla tamamlanır
 
-Kurallar:
-- TC_ID şu formda olmalı: {op.op_id}_TC1, {op.op_id}_TC2, ...
-- Request body varsa geçerli bir JSON nesnesi ({{ }}) olmalı.
-- Body yoksa aynen "-" yaz.
-- HTTP method ve path kısmında boşlukla ayrılmış method ve path kullan (örn: GET /users/1).
-- Ekstra açıklama yazma, sadece bu formatta satırlar üret.
+KURALLAR:
+- TC_ID: {op.op_id}_TC1, {op.op_id}_TC2, ... formatında
+- Body yoksa "-", varsa geçerli JSON nesnesi
+- Satır başına ASLA numara, tire, yıldız veya ``` ekleme
+- Sadece ham satırlar, başka hiçbir şey yazma
 
-Şimdi tam olarak {num_cases} satır üret.
-""".strip()
+TAM OLARAK {num_cases} SATIR:""".strip()
 
 
 def parse_llm_lines_to_rows(
@@ -73,7 +72,17 @@ def parse_llm_lines_to_rows(
     """LLM çıktısındaki pipe-delimited satırları sözlük listesine dönüştürür."""
     rows: List[Dict] = []
     for line in lines:
-        parts = [p.strip() for p in line.split("|")]
+        # Markdown kod bloğu sınırlarını atla (``` veya ```python vb.)
+        if line.startswith("```"):
+            continue
+
+        # LLM'in eklediği "1. ", "2) ", "- ", "* " gibi önekleri temizle
+        line = _LIST_PREFIX_RE.sub("", line).strip()
+        if not line:
+            continue
+
+        # maxsplit=5 → JSON body içindeki | karakterlerini korur
+        parts = [p.strip() for p in line.split("|", 5)]
         if len(parts) != 6:
             continue
 
@@ -123,14 +132,18 @@ class BaseGenerator(ABC):
         variant_desc: str,
         num_cases: int,
     ) -> List[Dict]:
-        """Verilen operasyonlar için test senaryoları üretir."""
-        rows: List[Dict] = []
-        for op in operations:
-            result = self._generate_for_operation_with_retry(
-                op, variant_name, variant_desc, num_cases
-            )
-            rows.extend(result)
-        return rows
+        """Verilen operasyonlar için test senaryoları paralel olarak üretir."""
+        if not operations:
+            return []
+        workers = min(MAX_PARALLEL_WORKERS, len(operations))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            results = list(executor.map(
+                lambda op: self._generate_for_operation_with_retry(
+                    op, variant_name, variant_desc, num_cases
+                ),
+                operations,
+            ))
+        return [row for sublist in results for row in sublist]
 
     def _generate_for_operation_with_retry(
         self,
@@ -145,7 +158,7 @@ class BaseGenerator(ABC):
                 return self._generate_for_operation(op, variant_name, variant_desc, num_cases)
             except Exception as e:
                 if _is_non_retryable_generation_error(e):
-                    print(f"  [HATA] {op.op_id} kalici provider/kredi hatasi: {e}")
+                    print(f"  [HATA] {op.op_id} kalıcı provider/kredi hatası: {e}")
                     break
                 if attempt < RETRY_MAX_ATTEMPTS:
                     wait = RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1))

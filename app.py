@@ -237,7 +237,7 @@ def upload():
     if "file" not in request.files:
         return jsonify({"error": "Dosya bulunamadı"}), 400
     f = request.files["file"]
-    safe_name = f"{uuid.uuid4().hex}_{f.filename}"
+    safe_name = uuid.uuid4().hex
     path = os.path.join(UPLOAD_FOLDER, safe_name)
     f.save(path)
     return jsonify({"path": path, "name": f.filename})

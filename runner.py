@@ -46,7 +46,7 @@ def run_testcases(
 
     Returns each row with `url`, `actual_status`, and `pass` fields added.
     """
-    print("\n=== Test senaryolari calistiriliyor ===")
+    print("\n=== Test senaryoları çalıştırılıyor ===")
     session = requests.Session()
 
     if auth_token:
@@ -81,7 +81,7 @@ def run_testcases(
         except Exception as e:
             status = None
             passed = None
-            print(f"  {row['tc_id']} istegi hata verdi: {e}")
+            print(f"  {row['tc_id']} isteği hata verdi: {e}")
 
         new_row = dict(row)
         new_row["url"] = full_url

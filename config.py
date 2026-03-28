@@ -43,6 +43,9 @@ REQUEST_TIMEOUT: int = 10
 RETRY_MAX_ATTEMPTS: int = 3
 RETRY_BACKOFF_SECONDS: float = 2.0
 
+# LLM operasyonları için paralel thread sayısı (I/O-bound API çağrıları)
+MAX_PARALLEL_WORKERS: int = 5
+
 
 def normalize_num_cases(value: object, default: int = NUM_CASES_PER_OPERATION) -> int:
     """Pozitif testcase sayısı döner; geçersiz girişte default kullanır."""

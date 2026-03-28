@@ -41,11 +41,17 @@ class ClaudeGenerator(BaseGenerator):
         print(f"[Claude - {self.model} - {variant_name}] {op.op_id} ({op.method} {op.path}) üretiliyor...")
 
         prompt = build_llm_prompt(op, num_cases, variant_name, variant_desc)
+        max_tokens = min(8192, max(2048, num_cases * 150))
         message = client.messages.create(
             model=self.model,
-            max_tokens=2048,
+            max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
         )
         text: str = message.content[0].text if message.content else ""
         lines = [l.strip() for l in text.splitlines() if l.strip()]
-        return parse_llm_lines_to_rows(lines, op, generator_name)
+        rows = parse_llm_lines_to_rows(lines, op, generator_name)
+        if message.usage:
+            total_tokens = message.usage.input_tokens + message.usage.output_tokens
+            for row in rows:
+                row["tokens_used"] = total_tokens
+        return rows

@@ -48,7 +48,7 @@ def save_operations_csv(operations: List[ApiOperation], output_dir: str) -> str:
 RESULT_FIELDNAMES = [
     "generator", "operation_id", "http_method", "path",
     "tc_id", "title", "request_body", "expected_status", "expected_result",
-    "url", "actual_status", "pass",
+    "url", "actual_status", "pass", "tokens_used",
 ]
 
 
@@ -71,6 +71,7 @@ def save_results_csv(rows: List[Dict], output_dir: str) -> str:
 
 METRICS_FIELDNAMES = [
     "generator", "total_tests", "pass_count", "fail_count", "pass_rate",
+    "total_tokens", "avg_tokens_per_tc",
     "expected_status_distribution", "actual_status_distribution",
 ]
 
@@ -97,12 +98,15 @@ def compute_generator_metrics(rows: List[Dict]) -> List[Dict]:
             if as_ not in ("", None):
                 act_dist[str(as_)] += 1
 
+        total_tokens = sum(r.get("tokens_used") or 0 for r in gen_rows)
         metrics.append({
             "generator": gen,
             "total_tests": total,
             "pass_count": num_pass,
             "fail_count": num_fail,
             "pass_rate": round(num_pass / total, 3) if total else "",
+            "total_tokens": total_tokens or "",
+            "avg_tokens_per_tc": round(total_tokens / total, 1) if total and total_tokens else "",
             "expected_status_distribution": json.dumps(dict(exp_dist), ensure_ascii=False),
             "actual_status_distribution": json.dumps(dict(act_dist), ensure_ascii=False),
         })
@@ -424,7 +428,7 @@ def print_summary_table(rows: List[Dict]) -> None:
     col_gen = max(col_gen, 9)  # "Generator" başlığı
 
     header = (
-        f"{'Generator':<{col_gen}}  {'Total':>6}  {'PASS':>6}  {'FAIL':>6}  {'Rate':>6}"
+        f"{'Generator':<{col_gen}}  {'Total':>6}  {'PASS':>6}  {'FAIL':>6}  {'Rate':>6}  {'Tokens':>8}  {'Tok/TC':>6}"
     )
     sep = "-" * len(header)
 
@@ -435,12 +439,16 @@ def print_summary_table(rows: List[Dict]) -> None:
     print(sep)
     for m in metrics:
         rate = f"{m['pass_rate']:.1%}" if m["pass_rate"] != "" else "N/A"
+        tok_total = f"{m['total_tokens']:,}" if m.get("total_tokens") not in ("", None) else "-"
+        tok_avg = f"{m['avg_tokens_per_tc']}" if m.get("avg_tokens_per_tc") not in ("", None) else "-"
         print(
             f"{m['generator']:<{col_gen}}  "
             f"{m['total_tests']:>6}  "
             f"{m['pass_count']:>6}  "
             f"{m['fail_count']:>6}  "
-            f"{rate:>6}"
+            f"{rate:>6}  "
+            f"{tok_total:>8}  "
+            f"{tok_avg:>6}"
         )
     print(sep)
     rate_all = f"{pass_all / total_all:.1%}" if total_all else "N/A"
@@ -449,6 +457,8 @@ def print_summary_table(rows: List[Dict]) -> None:
         f"{total_all:>6}  "
         f"{pass_all:>6}  "
         f"{fail_all:>6}  "
-        f"{rate_all:>6}"
+        f"{rate_all:>6}  "
+        f"{'':>8}  "
+        f"{'':>6}"
     )
     print("=" * len(header))

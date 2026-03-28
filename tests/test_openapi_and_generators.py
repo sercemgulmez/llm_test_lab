@@ -95,7 +95,7 @@ def test_build_llm_prompt_and_parse_lines_round_trip():
     ]
     rows = parse_llm_lines_to_rows(lines, op, "LLM-X")
 
-    assert "Simdi tam olarak 3 satir uret" in prompt or "Şimdi tam olarak 3 satır üret" in prompt
+    assert "TAM OLARAK 3 SATIR" in prompt
     assert len(rows) == 2
     assert rows[0]["generator"] == "LLM-X"
     assert rows[0]["expected_status"] == 200
