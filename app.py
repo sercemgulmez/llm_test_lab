@@ -14,6 +14,12 @@ import sys
 import threading
 import uuid
 
+# Windows konsolunda Türkçe karakterlerin doğru görünmesi için UTF-8 zorla
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 from flask import Flask, Response, jsonify, render_template, request, send_file
 from dotenv import load_dotenv
 
@@ -55,15 +61,17 @@ class _LogCapture:
     def __init__(self, q: queue.Queue):
         self.q = q
         self.buf = ""
+        self._lock = threading.Lock()
 
     def write(self, text: str):
         _orig_stdout.write(text)
         _orig_stdout.flush()
-        self.buf += text
-        while "\n" in self.buf:
-            line, self.buf = self.buf.split("\n", 1)
-            if line.strip():
-                self.q.put({"type": "log", "text": line})
+        with self._lock:
+            self.buf += text
+            while "\n" in self.buf:
+                line, self.buf = self.buf.split("\n", 1)
+                if line.strip():
+                    self.q.put({"type": "log", "text": line})
 
     def flush(self):
         _orig_stdout.flush()
@@ -139,6 +147,9 @@ def _execute_pipeline(data: dict) -> dict:
 
     def _run_llm(gen_instance, model_name: str, provider: str):
         for v_name, v_desc in config.PROMPT_VARIANTS.items():
+            if gen_instance._aborted:
+                print(f"[{provider} {model_name} / {v_name}] kredi/auth hatası nedeniyle atlandı.")
+                continue
             try:
                 rows = gen_instance.generate(
                     operations,
@@ -179,11 +190,10 @@ def _execute_pipeline(data: dict) -> dict:
 
     result_path = save_results_csv(executed_rows, output_dir)
 
-    metrics = []
+    metrics = compute_generator_metrics(executed_rows)
     comparison = build_comparison_summary(executed_rows)
 
     if not no_run:
-        metrics = compute_generator_metrics(executed_rows)
         save_generator_metrics_csv(metrics, output_dir)
 
     print(f"\nTamamlandı! Çıktılar: {output_dir}/")

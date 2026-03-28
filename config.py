@@ -40,8 +40,9 @@ OUTPUT_DIR: str = "outputs"
 REQUEST_TIMEOUT: int = 10
 
 # LLM API retry ayarları
+# Backoff: 8s → 16s → (max deneme). Gemini free tier "retry in 6s" için yeterli.
 RETRY_MAX_ATTEMPTS: int = 3
-RETRY_BACKOFF_SECONDS: float = 2.0
+RETRY_BACKOFF_SECONDS: float = 8.0
 
 # LLM operasyonları için paralel thread sayısı (I/O-bound API çağrıları)
 MAX_PARALLEL_WORKERS: int = 5

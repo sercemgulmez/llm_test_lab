@@ -12,10 +12,9 @@ from config import MAX_PARALLEL_WORKERS, RETRY_MAX_ATTEMPTS, RETRY_BACKOFF_SECON
 
 
 _NON_RETRYABLE_ERROR_MARKERS = (
+    # Fatura/kota hataları — tekrar denemeyle düzelmez
     "insufficient_quota",
     "credit balance is too low",
-    "plans & billing",
-    "check your plan and billing",
     # OpenAI kimlik doğrulama hataları
     "incorrect api key",
     "invalid api key",
@@ -131,6 +130,9 @@ def _apply_token_tracking(rows: List[Dict], total_tokens: int) -> None:
 class BaseGenerator(ABC):
     """Tüm test senaryosu üreticileri için temel sınıf."""
 
+    # Non-retryable hata gelince True; kalan tüm operasyonlar hemen atlanır.
+    _aborted: bool = False
+
     def generate(
         self,
         operations: List[ApiOperation],
@@ -139,7 +141,7 @@ class BaseGenerator(ABC):
         num_cases: int,
     ) -> List[Dict]:
         """Verilen operasyonlar için test senaryoları paralel olarak üretir."""
-        if not operations:
+        if not operations or self._aborted:
             return []
         workers = min(MAX_PARALLEL_WORKERS, len(operations))
         with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -159,12 +161,15 @@ class BaseGenerator(ABC):
         num_cases: int,
     ) -> List[Dict]:
         """Tek operasyon için retry mantığıyla senaryo üretir."""
+        if self._aborted:
+            return []
         for attempt in range(1, RETRY_MAX_ATTEMPTS + 1):
             try:
                 return self._generate_for_operation(op, variant_name, variant_desc, num_cases)
             except Exception as e:
                 if _is_non_retryable_generation_error(e):
-                    print(f"  [HATA] {op.op_id} kalıcı provider/kredi hatası: {e}")
+                    self._aborted = True
+                    print(f"  [HATA] {op.op_id} kalıcı provider/kredi hatası — generator iptal edildi: {e}")
                     break
                 if attempt < RETRY_MAX_ATTEMPTS:
                     wait = RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1))
