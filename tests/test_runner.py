@@ -78,3 +78,45 @@ def test_run_testcases_executes_requests_and_sets_pass(monkeypatch):
     assert result[2]["actual_status"] == ""
     assert result[2]["pass"] is None
     assert dummy.calls[1][2] == {"name": "Ada"}
+
+
+def test_run_testcases_stops_after_blocked_network_error(monkeypatch):
+    class BlockedSession:
+        def __init__(self):
+            self.headers = {}
+            self.cookies = {}
+            self.calls = []
+
+        def request(self, method, url, json=None, timeout=None):
+            self.calls.append((method, url, json, timeout))
+            raise requests.RequestException(
+                "Failed to establish a new connection: [WinError 10013] access permissions"
+            )
+
+    dummy = BlockedSession()
+    monkeypatch.setattr("runner.requests.Session", lambda: dummy)
+
+    rows = [
+        {
+            "tc_id": "TC1",
+            "path": "/users",
+            "http_method": "GET",
+            "request_body": "",
+            "expected_status": 200,
+        },
+        {
+            "tc_id": "TC2",
+            "path": "/users",
+            "http_method": "GET",
+            "request_body": "",
+            "expected_status": 200,
+        },
+    ]
+
+    result = run_testcases("https://api.example.com", rows)
+
+    assert len(dummy.calls) == 1
+    assert result[0]["actual_status"] == ""
+    assert result[0]["pass"] is None
+    assert result[1]["actual_status"] == ""
+    assert result[1]["pass"] is None

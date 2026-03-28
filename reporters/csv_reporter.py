@@ -372,11 +372,12 @@ def build_comparison_summary(rows: List[Dict]) -> Dict:
             total = len(gen_rows)
             passed = sum(1 for r in gen_rows if r.get("pass") is True)
             failed = sum(1 for r in gen_rows if r.get("pass") is False)
+            evaluated_total = passed + failed
             per_generator[generator] = {
                 "total": total,
                 "pass": passed,
                 "fail": failed,
-                "pass_rate": round(passed / total, 3) if total else None,
+                "pass_rate": round(passed / evaluated_total, 3) if evaluated_total else None,
             }
 
         operation_rows.append({

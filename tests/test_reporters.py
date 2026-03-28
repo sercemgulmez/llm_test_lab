@@ -90,3 +90,22 @@ def test_compute_generator_metrics_leaves_pass_rate_empty_when_not_executed():
     assert metrics[0]["pass_count"] == 0
     assert metrics[0]["fail_count"] == 0
     assert metrics[0]["pass_rate"] == ""
+
+
+def test_build_comparison_summary_leaves_operation_pass_rate_empty_when_not_executed():
+    summary = build_comparison_summary([
+        {
+            "generator": "A",
+            "operation_id": "op1",
+            "http_method": "GET",
+            "path": "/users",
+            "title": "not executed",
+            "request_body": "",
+            "expected_status": 200,
+            "expected_result": "ok",
+            "actual_status": "",
+            "pass": None,
+        }
+    ])
+
+    assert summary["operation_comparison"][0]["generator_stats"]["A"]["pass_rate"] is None

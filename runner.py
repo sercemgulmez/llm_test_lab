@@ -34,6 +34,16 @@ def _join_url(base_url: str, path: str) -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, combined_path, "", ""))
 
 
+def _is_blocked_network_error(exc: Exception) -> bool:
+    """Sandbox/OS kaynaklı dış ağ erişim engellerini tespit eder."""
+    message = str(exc).lower()
+    return (
+        "winerror 10013" in message
+        or "permission denied" in message
+        or "forbidden by its access permissions" in message
+    )
+
+
 def run_testcases(
     base_url: str,
     rows: List[Dict],
@@ -59,6 +69,7 @@ def run_testcases(
         session.cookies.update(cookies)
 
     executed: List[Dict] = []
+    skip_remaining_due_to_network_block = False
 
     for row in rows:
         full_url = _join_url(base_url, row["path"])
@@ -74,14 +85,25 @@ def run_testcases(
 
         expected_status = row.get("expected_status")
 
-        try:
-            resp = session.request(method, full_url, json=json_body, timeout=REQUEST_TIMEOUT)
-            status = resp.status_code
-            passed: object = (status == expected_status) if isinstance(expected_status, int) else None
-        except Exception as e:
+        if skip_remaining_due_to_network_block:
             status = None
             passed = None
-            print(f"  {row['tc_id']} isteği hata verdi: {e}")
+        else:
+            try:
+                resp = session.request(method, full_url, json=json_body, timeout=REQUEST_TIMEOUT)
+                status = resp.status_code
+                passed: object = (status == expected_status) if isinstance(expected_status, int) else None
+            except Exception as e:
+                status = None
+                passed = None
+                if _is_blocked_network_error(e):
+                    skip_remaining_due_to_network_block = True
+                    print(
+                        f"  {row['tc_id']} isteği hata verdi: Ortam dış ağa erişime izin vermiyor ({e})."
+                    )
+                    print("  Kalan testler aynı ağ erişim engeli nedeniyle çalıştırılmadan işaretlenecek.")
+                else:
+                    print(f"  {row['tc_id']} isteği hata verdi: {e}")
 
         new_row = dict(row)
         new_row["url"] = full_url
