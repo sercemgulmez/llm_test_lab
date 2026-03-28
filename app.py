@@ -9,6 +9,7 @@ Ardından tarayıcıda aç: http://localhost:5000
 import csv
 import json
 import os
+from pathlib import Path
 import queue
 import sys
 import threading
@@ -43,8 +44,29 @@ from reporters.csv_reporter import (
 from runner import run_testcases
 
 app = Flask(__name__)
-UPLOAD_FOLDER = "uploads"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+
+def _resolve_upload_folder() -> str:
+    """Yazılabilir upload klasörünü seçer; gerekirse güvenli fallback kullanır."""
+    candidates = [Path("uploads"), Path("runtime_uploads")]
+    for candidate in candidates:
+        try:
+            candidate.mkdir(exist_ok=True)
+            probe = candidate / f".write_probe_{uuid.uuid4().hex}"
+            probe.write_text("", encoding="utf-8")
+            probe.unlink()
+            return str(candidate)
+        except OSError:
+            continue
+
+    fallback = Path(f"runtime_uploads_{uuid.uuid4().hex}")
+    fallback.mkdir()
+    return str(fallback)
+
+
+UPLOAD_FOLDER = _resolve_upload_folder()
+if UPLOAD_FOLDER != "uploads":
+    print(f"UYARI: 'uploads' klasörü yazılabilir değil; '{UPLOAD_FOLDER}' kullanılacak.")
 
 # ── İş durumu ────────────────────────────────────────────────────────────────
 _jobs: dict = {}
@@ -278,6 +300,7 @@ def upload():
     if "file" not in request.files:
         return jsonify({"error": "Dosya bulunamadı"}), 400
     f = request.files["file"]
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
     safe_name = uuid.uuid4().hex
     path = os.path.join(UPLOAD_FOLDER, safe_name)
     f.save(path)

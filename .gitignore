@@ -22,6 +22,8 @@ pytest_work/
 pytest_cache_local/
 tmpcase-*/
 pytest_probe/
+runtime_uploads/
+runtime_uploads_*/
 
 # IDE
 .vscode/
