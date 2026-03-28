@@ -4,7 +4,7 @@ import os
 from typing import Dict, List
 
 from models import ApiOperation
-from generators.base import BaseGenerator, build_llm_prompt, parse_llm_lines_to_rows
+from generators.base import BaseGenerator, _apply_token_tracking, build_llm_prompt, parse_llm_lines_to_rows
 
 try:
     from openai import OpenAI  # type: ignore
@@ -48,10 +48,8 @@ class OpenAIGenerator(BaseGenerator):
             messages=[{"role": "user", "content": prompt}],
         )
         text: str = resp.choices[0].message.content or ""
-        lines = [l.strip() for l in text.splitlines() if l.strip()]
+        lines = [s for l in text.splitlines() if (s := l.strip())]
         rows = parse_llm_lines_to_rows(lines, op, generator_name)
         if resp.usage:
-            total_tokens = resp.usage.total_tokens
-            for row in rows:
-                row["tokens_used"] = total_tokens
+            _apply_token_tracking(rows, resp.usage.total_tokens)
         return rows

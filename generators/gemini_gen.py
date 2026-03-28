@@ -4,7 +4,7 @@ import os
 from typing import Dict, List
 
 from models import ApiOperation
-from generators.base import BaseGenerator, build_llm_prompt, parse_llm_lines_to_rows
+from generators.base import BaseGenerator, _apply_token_tracking, build_llm_prompt, parse_llm_lines_to_rows
 
 try:
     from google import genai  # type: ignore
@@ -43,11 +43,9 @@ class GeminiGenerator(BaseGenerator):
         prompt = build_llm_prompt(op, num_cases, variant_name, variant_desc)
         resp = client.models.generate_content(model=self.model, contents=prompt)
         text: str = getattr(resp, "text", "") or ""
-        lines = [l.strip() for l in text.splitlines() if l.strip()]
+        lines = [s for l in text.splitlines() if (s := l.strip())]
         rows = parse_llm_lines_to_rows(lines, op, generator_name)
         usage = getattr(resp, "usage_metadata", None)
         if usage:
-            total_tokens = getattr(usage, "total_token_count", 0) or 0
-            for row in rows:
-                row["tokens_used"] = total_tokens
+            _apply_token_tracking(rows, getattr(usage, "total_token_count", 0) or 0)
         return rows

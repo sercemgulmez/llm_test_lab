@@ -1041,9 +1041,9 @@
     const rankings = comparisonData?.generator_rankings || [];
     if (rankings.length < 1) return "";
 
-    const maxSpectral = Math.max(...rankings.map(r => r.matrix_score || 0)) || 1;
+    const maxSpectral = rankings.reduce((m, r) => Math.max(m, r.matrix_score || 0), 0) || 1;
     const tokenVals   = rankings.map(r => parseFloat(r.avg_tokens_per_tc) || 0).filter(v => v > 0);
-    const maxTokens   = Math.max(...tokenVals) || 1;
+    const maxTokens   = tokenVals.reduce((m, v) => Math.max(m, v), 0) || 1;
 
     const dims = [
       { label: "Pass Rate",  fn: r => r.pass_rate !== "" ? Math.min(1, parseFloat(r.pass_rate)) : 0 },
@@ -1124,21 +1124,22 @@
       const y = PT + i * (BH + GAP);
       const rate = r.pass_rate !== "" ? Math.min(1, parseFloat(r.pass_rate)) : 0;
       const color = genColor(r.generator);
-      const bw = (rate * CW).toFixed(1);
+      const bwNum = rate * CW;
+      const bw = bwNum.toFixed(1);
       const lbl = r.generator.length > 18 ? r.generator.slice(0, 18) + "…" : r.generator;
       passBar += `<text x="${LW - 4}" y="${y + BH / 2 + 4}" text-anchor="end" font-size="10" fill="#c9d1d9" font-family="-apple-system,sans-serif">${lbl}</text>`;
       passBar += `<rect x="${LW}" y="${y}" width="${CW}" height="${BH}" fill="#21262d" rx="3"/>`;
       if (rate > 0) passBar += `<rect x="${LW}" y="${y}" width="${bw}" height="${BH}" fill="${color}" rx="3" opacity="0.9"/>`;
       const pct = r.pass_rate !== "" ? (parseFloat(r.pass_rate) * 100).toFixed(1) + "%" : "N/A";
-      passBar += `<text x="${LW + parseFloat(bw) + 5}" y="${y + BH / 2 + 4}" font-size="10" fill="${color}" font-weight="600" font-family="-apple-system,sans-serif">${pct}</text>`;
+      passBar += `<text x="${LW + bwNum + 5}" y="${y + BH / 2 + 4}" font-size="10" fill="${color}" font-weight="600" font-family="-apple-system,sans-serif">${pct}</text>`;
     }
     passBar += `</svg>`;
 
     // ── Token / TC bar chart ────────────────────────────────────────
-    const tokRank = rankings.filter(r => r.avg_tokens_per_tc !== "" && r.avg_tokens_per_tc != null && parseFloat(r.avg_tokens_per_tc) > 0);
+    const tokRank = rankings.filter(r => (parseFloat(r.avg_tokens_per_tc) || 0) > 0);
     let tokenBar = "";
     if (tokRank.length > 0) {
-      const maxTok = Math.max(...tokRank.map(r => parseFloat(r.avg_tokens_per_tc)));
+      const maxTok = tokRank.reduce((m, r) => Math.max(m, parseFloat(r.avg_tokens_per_tc)), 0);
       const tkH = PT + tokRank.length * (BH + GAP);
       let tk = `<svg viewBox="0 0 ${SVG_W} ${tkH}" style="width:100%;max-width:${SVG_W}px">`;
       tk += `<text x="${LW}" y="13" font-size="9" fill="#8b949e" letter-spacing="0.05em">TOKEN / TESTCASE (az = verimli)</text>`;
@@ -1149,12 +1150,13 @@
         const y = PT + i * (BH + GAP);
         const val = parseFloat(r.avg_tokens_per_tc);
         const color = genColor(r.generator);
-        const bw = ((val / maxTok) * CW).toFixed(1);
+        const bwNum = (val / maxTok) * CW;
+        const bw = bwNum.toFixed(1);
         const lbl = r.generator.length > 18 ? r.generator.slice(0, 18) + "…" : r.generator;
         tk += `<text x="${LW - 4}" y="${y + BH / 2 + 4}" text-anchor="end" font-size="10" fill="#c9d1d9" font-family="-apple-system,sans-serif">${lbl}</text>`;
         tk += `<rect x="${LW}" y="${y}" width="${CW}" height="${BH}" fill="#21262d" rx="3"/>`;
         tk += `<rect x="${LW}" y="${y}" width="${bw}" height="${BH}" fill="${color}" rx="3" opacity="0.9"/>`;
-        tk += `<text x="${LW + parseFloat(bw) + 5}" y="${y + BH / 2 + 4}" font-size="10" fill="${color}" font-weight="600" font-family="-apple-system,sans-serif">${val.toFixed(0)}</text>`;
+        tk += `<text x="${LW + bwNum + 5}" y="${y + BH / 2 + 4}" font-size="10" fill="${color}" font-weight="600" font-family="-apple-system,sans-serif">${val.toFixed(0)}</text>`;
       }
       tk += `</svg>`;
       tokenBar = tk;

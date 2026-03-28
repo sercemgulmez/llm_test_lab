@@ -4,7 +4,7 @@ import os
 from typing import Dict, List
 
 from models import ApiOperation
-from generators.base import BaseGenerator, build_llm_prompt, parse_llm_lines_to_rows
+from generators.base import BaseGenerator, _apply_token_tracking, build_llm_prompt, parse_llm_lines_to_rows
 
 try:
     import anthropic  # type: ignore
@@ -48,10 +48,8 @@ class ClaudeGenerator(BaseGenerator):
             messages=[{"role": "user", "content": prompt}],
         )
         text: str = message.content[0].text if message.content else ""
-        lines = [l.strip() for l in text.splitlines() if l.strip()]
+        lines = [s for l in text.splitlines() if (s := l.strip())]
         rows = parse_llm_lines_to_rows(lines, op, generator_name)
         if message.usage:
-            total_tokens = message.usage.input_tokens + message.usage.output_tokens
-            for row in rows:
-                row["tokens_used"] = total_tokens
+            _apply_token_tracking(rows, message.usage.input_tokens + message.usage.output_tokens)
         return rows

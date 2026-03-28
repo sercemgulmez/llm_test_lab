@@ -122,6 +122,12 @@ def parse_llm_lines_to_rows(
     return rows
 
 
+def _apply_token_tracking(rows: List[Dict], total_tokens: int) -> None:
+    """Üretilen satırların tümüne token sayısını yazar."""
+    for row in rows:
+        row["tokens_used"] = total_tokens
+
+
 class BaseGenerator(ABC):
     """Tüm test senaryosu üreticileri için temel sınıf."""
 
