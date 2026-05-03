@@ -4,7 +4,7 @@ import os
 from typing import Dict, List
 
 from models import ApiOperation
-from generators.base import BaseGenerator, _apply_token_tracking, build_llm_prompt, parse_llm_lines_to_rows
+from generators.base import BaseGenerator
 
 try:
     import anthropic  # type: ignore
@@ -40,16 +40,25 @@ class ClaudeGenerator(BaseGenerator):
         generator_name = f"LLM-Claude-{self.model}-{variant_name}"
         print(f"[Claude - {self.model} - {variant_name}] {op.op_id} ({op.method} {op.path}) üretiliyor...")
 
-        prompt = build_llm_prompt(op, num_cases, variant_name, variant_desc)
-        max_tokens = min(8192, max(2048, num_cases * 150))
-        message = client.messages.create(
-            model=self.model,
-            max_tokens=max_tokens,
-            messages=[{"role": "user", "content": prompt}],
+        def request_completion(prompt: str) -> tuple[str, int]:
+            max_tokens = min(8192, max(2048, num_cases * 200))
+            message = client.messages.create(
+                model=self.model,
+                max_tokens=max_tokens,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text: str = message.content[0].text if message.content else ""
+            usage = getattr(message, "usage", None)
+            total_tokens = 0
+            if usage:
+                total_tokens = (getattr(usage, "input_tokens", 0) or 0) + (getattr(usage, "output_tokens", 0) or 0)
+            return text, total_tokens
+
+        return self._generate_cases_with_repair(
+            op=op,
+            variant_name=variant_name,
+            variant_desc=variant_desc,
+            num_cases=num_cases,
+            generator_name=generator_name,
+            request_completion=request_completion,
         )
-        text: str = message.content[0].text if message.content else ""
-        lines = [s for l in text.splitlines() if (s := l.strip())]
-        rows = parse_llm_lines_to_rows(lines, op, generator_name)
-        if message.usage:
-            _apply_token_tracking(rows, message.usage.input_tokens + message.usage.output_tokens)
-        return rows

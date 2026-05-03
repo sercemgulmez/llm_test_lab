@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import queue
+from collections import defaultdict
 import sys
 import threading
 import uuid
@@ -120,6 +121,157 @@ def _parse_cookie_string(cookie_str: str) -> dict[str, str]:
     return parsed
 
 
+def _default_generation_quality() -> dict:
+    return {
+        "requested_cases_per_operation": 0,
+        "total_operations": 0,
+        "selected_generator_count": 0,
+        "expected_total_cases": 0,
+        "generated_total_cases": 0,
+        "valid_total_cases": 0,
+        "invalid_total_cases": 0,
+        "repaired_total_cases": 0,
+        "fallback_total_cases": 0,
+        "per_generator_case_count": [],
+        "per_operation_case_count": [],
+        "validation_error_summary": {},
+    }
+
+
+def _selected_generator_keys(selected_keys: list[str]) -> list[str]:
+    if selected_keys:
+        return list(selected_keys)
+    keys = ["traditional"]
+    keys.extend(f"openai:{model}" for model in config.OPENAI_MODELS)
+    keys.extend(f"gemini:{model}" for model in config.GEMINI_MODELS)
+    keys.extend(f"claude:{model}" for model in config.CLAUDE_MODELS)
+    keys.extend(f"groq:{model}" for model in config.GROQ_MODELS)
+    return keys
+
+
+def _expected_generation_runs(selected_keys: list[str]) -> int:
+    runs = 0
+    for key in _selected_generator_keys(selected_keys):
+        if key == "traditional":
+            runs += 1
+        else:
+            runs += len(config.PROMPT_VARIANTS)
+    return runs
+
+
+def _row_generation_metadata(row: dict) -> dict:
+    metadata = row.get("generation_metadata")
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _build_generation_quality(
+    operations: list,
+    selected_keys: list[str],
+    num_cases: int,
+    rows: list[dict],
+    generation_summaries: list[dict],
+) -> dict:
+    quality = _default_generation_quality()
+    quality["requested_cases_per_operation"] = num_cases
+    quality["total_operations"] = len(operations)
+    quality["selected_generator_count"] = len(_selected_generator_keys(selected_keys))
+    quality["expected_total_cases"] = len(operations) * num_cases * _expected_generation_runs(selected_keys)
+    quality["generated_total_cases"] = len(rows)
+
+    if generation_summaries:
+        quality["valid_total_cases"] = sum(int(item.get("valid_cases", 0) or 0) for item in generation_summaries)
+        quality["invalid_total_cases"] = sum(int(item.get("invalid_cases", 0) or 0) for item in generation_summaries)
+        quality["repaired_total_cases"] = sum(int(item.get("repaired_cases", 0) or 0) for item in generation_summaries)
+        quality["fallback_total_cases"] = sum(int(item.get("fallback_cases", 0) or 0) for item in generation_summaries)
+    else:
+        quality["valid_total_cases"] = sum(1 for row in rows if not row.get("validation_errors"))
+        quality["invalid_total_cases"] = max(quality["generated_total_cases"] - quality["valid_total_cases"], 0)
+        quality["repaired_total_cases"] = sum(1 for row in rows if _row_generation_metadata(row).get("repaired") is True)
+        quality["fallback_total_cases"] = sum(1 for row in rows if _row_generation_metadata(row).get("fallback") is True)
+
+    if generation_summaries:
+        grouped: dict[str, dict] = defaultdict(lambda: {
+            "generator": "",
+            "generated": 0,
+            "valid": 0,
+            "invalid": 0,
+            "repaired": 0,
+            "fallback": 0,
+        })
+        for item in generation_summaries:
+            generator = str(item.get("generator", ""))
+            bucket = grouped[generator]
+            bucket["generator"] = generator
+            bucket["generated"] += int(item.get("generated_cases", 0) or 0)
+            bucket["valid"] += int(item.get("valid_cases", 0) or 0)
+            bucket["invalid"] += int(item.get("invalid_cases", 0) or 0)
+            bucket["repaired"] += int(item.get("repaired_cases", 0) or 0)
+            bucket["fallback"] += int(item.get("fallback_cases", 0) or 0)
+        quality["per_generator_case_count"] = sorted(grouped.values(), key=lambda item: item["generator"])
+    else:
+        grouped: dict[str, dict] = {}
+        for row in rows:
+            generator = str(row.get("generator", ""))
+            bucket = grouped.setdefault(generator, {
+                "generator": generator,
+                "generated": 0,
+                "valid": 0,
+                "invalid": 0,
+                "repaired": 0,
+                "fallback": 0,
+            })
+            metadata = _row_generation_metadata(row)
+            bucket["generated"] += 1
+            bucket["valid"] += 0 if row.get("validation_errors") else 1
+            bucket["invalid"] += 1 if row.get("validation_errors") else 0
+            bucket["repaired"] += 1 if metadata.get("repaired") is True else 0
+            bucket["fallback"] += 1 if metadata.get("fallback") is True else 0
+        quality["per_generator_case_count"] = sorted(grouped.values(), key=lambda item: item["generator"])
+
+    if generation_summaries:
+        op_grouped: dict[tuple[str, str, str], dict] = defaultdict(lambda: {
+            "operation_id": "",
+            "method": "",
+            "path": "",
+            "expected_count": 0,
+            "actual_valid_count": 0,
+        })
+        for item in generation_summaries:
+            key = (str(item.get("operation_id", "")), str(item.get("method", "")), str(item.get("path", "")))
+            bucket = op_grouped[key]
+            bucket["operation_id"], bucket["method"], bucket["path"] = key
+            bucket["expected_count"] += int(item.get("requested_cases", 0) or 0)
+            bucket["actual_valid_count"] += int(item.get("valid_cases", 0) or 0)
+        quality["per_operation_case_count"] = sorted(op_grouped.values(), key=lambda item: (item["operation_id"], item["method"], item["path"]))
+    else:
+        expected_per_operation = num_cases * _expected_generation_runs(selected_keys)
+        op_grouped: dict[tuple[str, str, str], dict] = defaultdict(lambda: {
+            "operation_id": "",
+            "method": "",
+            "path": "",
+            "expected_count": expected_per_operation,
+            "actual_valid_count": 0,
+        })
+        for row in rows:
+            key = (str(row.get("operation_id", "")), str(row.get("http_method", "")), str(row.get("path", "")))
+            bucket = op_grouped[key]
+            bucket["operation_id"], bucket["method"], bucket["path"] = key
+            if not row.get("validation_errors"):
+                bucket["actual_valid_count"] += 1
+        quality["per_operation_case_count"] = sorted(op_grouped.values(), key=lambda item: (item["operation_id"], item["method"], item["path"]))
+
+    validation_summary: dict[str, int] = {}
+    if generation_summaries:
+        for item in generation_summaries:
+            for error, count in (item.get("validation_error_summary") or {}).items():
+                validation_summary[str(error)] = validation_summary.get(str(error), 0) + int(count or 0)
+    for row in rows:
+        for error in row.get("validation_errors") or []:
+            validation_summary[str(error)] = validation_summary.get(str(error), 0) + 1
+    quality["validation_error_summary"] = dict(sorted(validation_summary.items(), key=lambda item: (-item[1], item[0])))
+    return quality
+
+
 # ── Pipeline ─────────────────────────────────────────────────────────────────
 
 def _execute_pipeline(data: dict) -> dict:
@@ -181,11 +333,13 @@ def _execute_pipeline(data: dict) -> dict:
 
     # Senaryo üretimi
     all_rows: list = []
+    generation_summaries: list = []
 
     if not selected_keys or "traditional" in selected_keys:
         trad = TraditionalGenerator()
-        rows = trad.generate(operations, "", "", 0)
+        rows = trad.generate(operations, "", "", num_cases)
         all_rows.extend(rows)
+        generation_summaries.extend(getattr(trad, "_generation_summaries", []))
         print(f"[Geleneksel] {len(rows)} senaryo üretildi.")
 
     def _run_llm(gen_instance, model_name: str, provider: str):
@@ -201,6 +355,7 @@ def _execute_pipeline(data: dict) -> dict:
                     num_cases=num_cases,
                 )
                 all_rows.extend(rows)
+                generation_summaries.extend(getattr(gen_instance, "_generation_summaries", []))
                 print(f"[{provider} {model_name} / {v_name}] {len(rows)} senaryo üretildi.")
             except RuntimeError as e:
                 print(f"UYARI [{provider} {model_name}]: {e} — atlandı.")
@@ -239,6 +394,13 @@ def _execute_pipeline(data: dict) -> dict:
 
     metrics = compute_generator_metrics(executed_rows)
     comparison = build_comparison_summary(executed_rows)
+    generation_quality = _build_generation_quality(
+        operations=operations,
+        selected_keys=selected_keys,
+        num_cases=num_cases,
+        rows=executed_rows,
+        generation_summaries=generation_summaries,
+    )
 
     if not no_run:
         save_generator_metrics_csv(metrics, output_dir)
@@ -248,6 +410,7 @@ def _execute_pipeline(data: dict) -> dict:
         "result_file": result_path,
         "metrics": metrics,
         "comparison": comparison,
+        "generation_quality": generation_quality,
         "output_dir": output_dir,
     }
 
@@ -263,6 +426,7 @@ def _job_thread(job_id: str, data: dict):
             _jobs[job_id]["result_file"] = result["result_file"]
             _jobs[job_id]["metrics"] = result["metrics"]
             _jobs[job_id]["comparison"] = result["comparison"]
+            _jobs[job_id]["generation_quality"] = result["generation_quality"]
             _jobs[job_id]["output_dir"] = result["output_dir"]
     except Exception as e:
         q.put({"type": "error", "text": str(e)})
@@ -324,6 +488,7 @@ def run_job():
             "result_file": None,
             "metrics": [],
             "comparison": {},
+            "generation_quality": _default_generation_quality(),
             "output_dir": data.get("output_dir") or config.OUTPUT_DIR,
         }
 
@@ -389,6 +554,13 @@ def comparison_data(job_id: str):
     if job_id not in _jobs:
         return jsonify({})
     return jsonify(_jobs[job_id].get("comparison", {}))
+
+
+@app.route("/generation_quality/<job_id>")
+def generation_quality_data(job_id: str):
+    if job_id not in _jobs:
+        return jsonify(_default_generation_quality())
+    return jsonify(_jobs[job_id].get("generation_quality") or _default_generation_quality())
 
 
 @app.route("/download/<job_id>")

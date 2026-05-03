@@ -59,6 +59,7 @@ def test_result_metrics_and_comparison_endpoints_return_job_data(tmp_path):
         "result_file": str(result_file),
         "metrics": [{"generator": "A", "pass_rate": 1.0}],
         "comparison": {"overview": {"best_generator": "A"}},
+        "generation_quality": {"expected_total_cases": 10, "generated_total_cases": 10},
         "output_dir": str(tmp_path),
     }
 
@@ -66,13 +67,26 @@ def test_result_metrics_and_comparison_endpoints_return_job_data(tmp_path):
     result_resp = client.get("/result_data/job-test")
     metrics_resp = client.get("/metrics/job-test")
     comparison_resp = client.get("/comparison/job-test")
+    quality_resp = client.get("/generation_quality/job-test")
 
     assert result_resp.status_code == 200
     assert result_resp.get_json()["headers"] == ["generator", "pass"]
     assert metrics_resp.get_json()[0]["generator"] == "A"
     assert comparison_resp.get_json()["overview"]["best_generator"] == "A"
+    assert quality_resp.get_json()["expected_total_cases"] == 10
 
     web_app._jobs.pop("job-test", None)
+
+
+def test_generation_quality_endpoint_returns_default_when_job_missing():
+    client = web_app.app.test_client()
+
+    resp = client.get("/generation_quality/missing-job")
+
+    payload = resp.get_json()
+    assert resp.status_code == 200
+    assert payload["expected_total_cases"] == 0
+    assert payload["per_generator_case_count"] == []
 
 
 def test_upload_accepts_file(tmp_path, monkeypatch):
@@ -101,6 +115,7 @@ def test_run_job_executes_with_synchronous_thread(monkeypatch, tmp_path):
             "result_file": str(result_file),
             "metrics": [{"generator": "A", "pass_rate": 1.0}],
             "comparison": {"overview": {"best_generator": "A"}},
+            "generation_quality": {"expected_total_cases": 4, "generated_total_cases": 4},
             "output_dir": str(tmp_path),
         }
 
@@ -128,6 +143,7 @@ def test_run_job_executes_with_synchronous_thread(monkeypatch, tmp_path):
     assert job_id == "job12345"
     assert web_app._jobs[job_id]["status"] == "done"
     assert web_app._jobs[job_id]["comparison"]["overview"]["best_generator"] == "A"
+    assert web_app._jobs[job_id]["generation_quality"]["generated_total_cases"] == 4
 
 
 def test_stream_endpoint_emits_log_and_done_messages():
@@ -141,6 +157,7 @@ def test_stream_endpoint_emits_log_and_done_messages():
         "result_file": "out.csv",
         "metrics": [],
         "comparison": {},
+        "generation_quality": web_app._default_generation_quality(),
         "output_dir": "outputs",
     }
 
@@ -163,6 +180,7 @@ def test_download_endpoint_returns_csv_file(tmp_path):
         "result_file": str(result_file),
         "metrics": [],
         "comparison": {},
+        "generation_quality": web_app._default_generation_quality(),
         "output_dir": str(tmp_path),
     }
 

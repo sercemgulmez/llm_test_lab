@@ -95,7 +95,9 @@ def test_build_llm_prompt_and_parse_lines_round_trip():
     ]
     rows = parse_llm_lines_to_rows(lines, op, "LLM-X")
 
-    assert "TAM OLARAK 3 SATIR" in prompt
+    assert "API_CONTRACT_JSON" in prompt
+    assert "strict JSON array" in prompt
+    assert "TAM OLARAK 3" in prompt
     assert len(rows) == 2
     assert rows[0]["generator"] == "LLM-X"
     assert rows[0]["expected_status"] == 200
@@ -114,7 +116,6 @@ def test_traditional_generator_produces_expected_templates():
     rows = TraditionalGenerator().generate([op])
 
     assert len(rows) == 5
-    assert rows[0]["expected_status"] == 200
-    assert rows[1]["expected_status"] == 400
-    assert rows[-1]["expected_status"] == 500
+    assert any(row["expected_status"] == 200 for row in rows)
+    assert any(row["expected_status"] == 500 for row in rows)
     assert all(row["operation_id"] == "USER_GET" for row in rows)

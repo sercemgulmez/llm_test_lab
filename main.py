@@ -460,7 +460,7 @@ def main() -> None:
     # Geleneksel şablon
     if selected_keys is None or "traditional" in selected_keys:
         trad_gen = TraditionalGenerator()
-        trad_rows = trad_gen.generate(operations, "", "", 0)
+        trad_rows = trad_gen.generate(operations, "", "", num_cases)
         all_rows.extend(trad_rows)
         print(f"  [Geleneksel] {len(trad_rows)} senaryo üretildi.")
 

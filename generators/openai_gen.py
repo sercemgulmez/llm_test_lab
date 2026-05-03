@@ -4,7 +4,7 @@ import os
 from typing import Dict, List
 
 from models import ApiOperation
-from generators.base import BaseGenerator, _apply_token_tracking, build_llm_prompt, parse_llm_lines_to_rows
+from generators.base import BaseGenerator
 
 try:
     from openai import OpenAI  # type: ignore
@@ -47,16 +47,22 @@ class OpenAIGenerator(BaseGenerator):
         generator_name = f"LLM-{self._provider_label}-{self.model}-{variant_name}"
         print(f"[{self._provider_label} - {self.model} - {variant_name}] {op.op_id} ({op.method} {op.path}) üretiliyor...")
 
-        prompt = build_llm_prompt(op, num_cases, variant_name, variant_desc)
-        max_tokens = min(16384, max(2048, num_cases * 150))
-        resp = client.chat.completions.create(
-            model=self.model,
-            max_tokens=max_tokens,
-            messages=[{"role": "user", "content": prompt}],
+        def request_completion(prompt: str) -> tuple[str, int]:
+            max_tokens = min(16384, max(2048, num_cases * 200))
+            resp = client.chat.completions.create(
+                model=self.model,
+                max_tokens=max_tokens,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text: str = resp.choices[0].message.content or ""
+            usage = getattr(resp, "usage", None)
+            return text, (getattr(usage, "total_tokens", 0) or 0)
+
+        return self._generate_cases_with_repair(
+            op=op,
+            variant_name=variant_name,
+            variant_desc=variant_desc,
+            num_cases=num_cases,
+            generator_name=generator_name,
+            request_completion=request_completion,
         )
-        text: str = resp.choices[0].message.content or ""
-        lines = [s for l in text.splitlines() if (s := l.strip())]
-        rows = parse_llm_lines_to_rows(lines, op, generator_name)
-        if resp.usage:
-            _apply_token_tracking(rows, resp.usage.total_tokens)
-        return rows

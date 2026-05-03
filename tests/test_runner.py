@@ -7,6 +7,7 @@ class _DummyResponse:
     def __init__(self, status_code):
         self.status_code = status_code
         self.text = ""
+        self.headers = {"Content-Type": "application/json"}
 
 
 class _DummySession:
@@ -15,8 +16,8 @@ class _DummySession:
         self.cookies = {}
         self.calls = []
 
-    def request(self, method, url, json=None, timeout=None):
-        self.calls.append((method, url, json, timeout))
+    def request(self, method, url, json=None, timeout=None, headers=None, cookies=None):
+        self.calls.append((method, url, json, timeout, headers, cookies))
         if url.endswith("/boom"):
             raise requests.RequestException("network error")
         return _DummyResponse(200 if method == "GET" else 201)
@@ -79,6 +80,7 @@ def test_run_testcases_executes_requests_and_sets_pass(monkeypatch):
     assert result[2]["actual_status"] == ""
     assert result[2]["pass"] is None
     assert dummy.calls[1][2] == {"name": "Ada"}
+    assert dummy.calls[1][4]["Authorization"] == "Bearer secret"
 
 
 def test_run_testcases_stops_after_blocked_network_error(monkeypatch):
@@ -88,8 +90,8 @@ def test_run_testcases_stops_after_blocked_network_error(monkeypatch):
             self.cookies = {}
             self.calls = []
 
-        def request(self, method, url, json=None, timeout=None):
-            self.calls.append((method, url, json, timeout))
+        def request(self, method, url, json=None, timeout=None, headers=None, cookies=None):
+            self.calls.append((method, url, json, timeout, headers, cookies))
             raise requests.RequestException(
                 "Failed to establish a new connection: [WinError 10013] access permissions"
             )

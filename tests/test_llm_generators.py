@@ -20,6 +20,7 @@ def test_openai_generator_uses_mocked_client(monkeypatch):
         def create(self, model, messages, max_tokens=None):
             assert model == "gpt-test"
             assert messages[0]["role"] == "user"
+            assert "strict JSON array" in messages[0]["content"]
             assert isinstance(max_tokens, int) and max_tokens >= 2048
             return type(
                 "Resp",
@@ -57,6 +58,7 @@ def test_gemini_generator_uses_mocked_client(monkeypatch):
         def generate_content(self, model, contents):
             assert model == "gemini-test"
             assert "LOGIN" in contents
+            assert "strict JSON array" in contents
             return type("Resp", (), {"text": 'LOGIN_TC1|Valid|POST /login|-|200|OK'})()
 
     class DummyClient:
@@ -83,6 +85,7 @@ def test_claude_generator_uses_mocked_client(monkeypatch):
             assert model == "claude-test"
             assert isinstance(max_tokens, int) and max_tokens >= 2048
             assert messages[0]["role"] == "user"
+            assert "strict JSON array" in messages[0]["content"]
             return type(
                 "Resp",
                 (),

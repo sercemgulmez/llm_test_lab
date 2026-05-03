@@ -317,6 +317,24 @@
     .metric-card .metric-label { font-size: 0.72rem; color: var(--muted); margin-bottom: 4px; }
     .metric-card .metric-val { font-size: 1.3rem; font-weight: 700; }
     .metric-card .metric-sub { font-size: 0.75rem; color: var(--muted); margin-top: 2px; }
+    .quality-banner {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 12px;
+      font-size: 0.84rem;
+      font-weight: 600;
+    }
+    .quality-banner.ok { background: #12261a; border-color: #1f6f3a; color: #7ee787; }
+    .quality-banner.warn { background: #2b2111; border-color: #8b6a1d; color: #e3b341; }
+    .quality-banner.err { background: #2d1517; border-color: #a1333a; color: #ff7b72; }
+    .quality-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    .quality-table td, .quality-table th { white-space: nowrap; }
     .section-title {
       font-size: 0.78rem;
       color: var(--muted);
@@ -781,15 +799,16 @@
       fetch("/result_data/" + jobId).then(r => r.json()),
       fetch("/metrics/" + jobId).then(r => r.json()),
       fetch("/comparison/" + jobId).then(r => r.json()),
-    ]).then(([tableData, metricsData, comparisonData]) => {
-      renderResults(jobId, tableData, metricsData, comparisonData);
+      fetch("/generation_quality/" + jobId).then(r => r.json()),
+    ]).then(([tableData, metricsData, comparisonData, generationQuality]) => {
+      renderResults(jobId, tableData, metricsData, comparisonData, generationQuality);
       // auto-switch
       const tabs = document.querySelectorAll(".tab-btn");
       switchTab("results", tabs[1]);
     });
   }
 
-  function renderResults(jobId, tableData, metricsData, comparisonData) {
+  function renderResults(jobId, tableData, metricsData, comparisonData, generationQuality) {
     const container = document.getElementById("results-content");
     let html = "";
 
@@ -849,6 +868,8 @@
       }
       html += `</div>`;
     }
+
+    html += renderGenerationQualitySection(generationQuality);
 
     if (comparisonData?.generator_rankings?.length) {
       html += `<div class="section-title">Generator Kıyas</div><div class="leaderboard">`;
@@ -1015,6 +1036,93 @@
     }
 
     container.innerHTML = html;
+  }
+
+  function renderGenerationQualitySection(generationQuality) {
+    const quality = generationQuality || {};
+    const expected = Number(quality.expected_total_cases || 0);
+    const generated = Number(quality.generated_total_cases || 0);
+    const valid = Number(quality.valid_total_cases || 0);
+    const invalid = Number(quality.invalid_total_cases || 0);
+    const repaired = Number(quality.repaired_total_cases || 0);
+    const fallback = Number(quality.fallback_total_cases || 0);
+
+    let bannerClass = "ok";
+    let bannerText = "Generation complete";
+    if (valid < expected) {
+      bannerClass = "err";
+      bannerText = `Generation incomplete — valid ${valid} / expected ${expected}`;
+    } else if (fallback > 0) {
+      bannerClass = "warn";
+      bannerText = `Fallback used — ${fallback} testcase fallback ile tamamlandi`;
+    }
+
+    let html = `<div class="section-title">Generation Quality</div>`;
+    html += `<div class="quality-banner ${bannerClass}">${escHtml(bannerText)}</div>`;
+    html += `<div class="quality-grid">`;
+    html += qualityMetricCard("Expected Cases", expected, `${quality.total_operations || 0} operasyon · ${quality.selected_generator_count || 0} secim`);
+    html += qualityMetricCard("Generated Cases", generated, "Toplam uretilen testcase");
+    html += qualityMetricCard("Valid Cases", valid, "Kullanilan/gecerli testcase");
+    html += qualityMetricCard("Invalid Cases", invalid, "Validation veya parse kaynakli");
+    html += qualityMetricCard("Repaired Cases", repaired, "Repair loop ile duzeltilen");
+    html += qualityMetricCard("Fallback Cases", fallback, "Fallback ile tamamlanan");
+    html += `</div>`;
+
+    const perGenerator = Array.isArray(quality.per_generator_case_count) ? quality.per_generator_case_count : [];
+    if (perGenerator.length) {
+      html += `<div class="section-title">Generator Quality</div>`;
+      html += `<div class="comparison-wrap"><table class="quality-table"><thead><tr><th>Generator</th><th>Generated</th><th>Valid</th><th>Invalid</th><th>Repaired</th><th>Fallback</th></tr></thead><tbody>`;
+      for (const row of perGenerator) {
+        html += `<tr>
+          <td><strong>${escHtml(row.generator || "")}</strong></td>
+          <td>${row.generated || 0}</td>
+          <td style="color:var(--green)">${row.valid || 0}</td>
+          <td style="color:${(row.invalid || 0) > 0 ? "var(--red)" : "var(--muted)"}">${row.invalid || 0}</td>
+          <td style="color:${(row.repaired || 0) > 0 ? "var(--yellow)" : "var(--muted)"}">${row.repaired || 0}</td>
+          <td style="color:${(row.fallback || 0) > 0 ? "var(--yellow)" : "var(--muted)"}">${row.fallback || 0}</td>
+        </tr>`;
+      }
+      html += `</tbody></table></div>`;
+    }
+
+    const perOperation = Array.isArray(quality.per_operation_case_count) ? quality.per_operation_case_count : [];
+    if (perOperation.length) {
+      html += `<div class="section-title">Operation Quality</div>`;
+      html += `<div class="comparison-wrap"><table class="quality-table"><thead><tr><th>operation_id</th><th>method</th><th>path</th><th>expected count</th><th>actual valid count</th></tr></thead><tbody>`;
+      for (const row of perOperation) {
+        const healthy = Number(row.actual_valid_count || 0) >= Number(row.expected_count || 0);
+        html += `<tr>
+          <td><strong>${escHtml(row.operation_id || "")}</strong></td>
+          <td>${escHtml(row.method || "")}</td>
+          <td>${escHtml(row.path || "")}</td>
+          <td>${row.expected_count || 0}</td>
+          <td style="color:${healthy ? "var(--green)" : "var(--red)"}">${row.actual_valid_count || 0}</td>
+        </tr>`;
+      }
+      html += `</tbody></table></div>`;
+    }
+
+    const validationSummary = quality.validation_error_summary || {};
+    const validationEntries = Object.entries(validationSummary);
+    if (validationEntries.length) {
+      html += `<div class="section-title">Validation Errors</div>`;
+      html += `<div class="comparison-wrap"><table class="quality-table"><thead><tr><th>Error</th><th>Count</th></tr></thead><tbody>`;
+      for (const [error, count] of validationEntries) {
+        html += `<tr><td>${escHtml(error)}</td><td>${count}</td></tr>`;
+      }
+      html += `</tbody></table></div>`;
+    }
+
+    return html;
+  }
+
+  function qualityMetricCard(label, value, subtext) {
+    return `
+      <div class="metric-card">
+        <div class="metric-label">${escHtml(label)}</div>
+        <div class="metric-val">${value}</div>
+        <div class="metric-sub">${escHtml(subtext || "")}</div>
+      </div>`;
   }
 
   function filterTable() {
