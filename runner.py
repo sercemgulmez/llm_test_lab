@@ -87,14 +87,17 @@ def run_testcases(
 
         if skip_remaining_due_to_network_block:
             status = None
+            actual_body = ""
             passed = None
         else:
             try:
                 resp = session.request(method, full_url, json=json_body, timeout=REQUEST_TIMEOUT)
                 status = resp.status_code
+                actual_body = getattr(resp, "text", "") or ""
                 passed: object = (status == expected_status) if isinstance(expected_status, int) else None
             except Exception as e:
                 status = None
+                actual_body = ""
                 passed = None
                 if _is_blocked_network_error(e):
                     skip_remaining_due_to_network_block = True
@@ -108,6 +111,7 @@ def run_testcases(
         new_row = dict(row)
         new_row["url"] = full_url
         new_row["actual_status"] = status if status is not None else ""
+        new_row["actual_body"] = actual_body
         new_row["pass"] = passed
         executed.append(new_row)
 

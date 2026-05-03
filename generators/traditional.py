@@ -1,10 +1,9 @@
 """Şablona dayalı geleneksel test senaryosu üreticisi."""
 
-import json
 from typing import Dict, List
 
-from models import ApiOperation
-from generators.base import BaseGenerator
+from models import ApiOperation, TestCase
+from generators.base import BaseGenerator, _infer_test_type
 
 
 class TraditionalGenerator(BaseGenerator):
@@ -23,7 +22,7 @@ class TraditionalGenerator(BaseGenerator):
         "OPTIONS": 200,
     }
 
-    def generate(self, operations: List[ApiOperation], *args, **kwargs) -> List[Dict]:
+    def generate(self, operations: List[ApiOperation], *_args, **_kwargs) -> List[Dict]:
         """Varyant ve retry gerekmez, direkt üretir."""
         rows: List[Dict] = []
         for op in operations:
@@ -34,60 +33,50 @@ class TraditionalGenerator(BaseGenerator):
         return rows
 
     def _generate_for_operation(
-        self, op: ApiOperation, variant_name: str, variant_desc: str, num_cases: int
+        self, op: ApiOperation, _variant_name: str, _variant_desc: str, _num_cases: int
     ) -> List[Dict]:
         success_code = self._SUCCESS_CODES.get(op.method, 200)
+        # (tc_id_suffix, title, body_dict, exp_status)
         templates = [
-            (
-                f"{op.op_id}_TC1",
-                f"{success_code} - Mutlu senaryo",
-                None,
-                success_code,
-                "İşlem başarıyla tamamlanmalı.",
-            ),
-            (
-                f"{op.op_id}_TC2",
-                "400 - Validasyon hatası",
-                {"dummy": "invalid"},
-                400,
-                "Hatalı istek için validasyon hatası dönmeli.",
-            ),
-            (
-                f"{op.op_id}_TC3",
-                "401 - Yetkisiz erişim",
-                None,
-                401,
-                "Yetkisiz kullanıcı için 401 dönmeli.",
-            ),
-            (
-                f"{op.op_id}_TC4",
-                "404 - Kaynak bulunamadı",
-                None,
-                404,
-                "Var olmayan kaynak için 404 dönmeli.",
-            ),
-            (
-                f"{op.op_id}_TC5",
-                "500 - Sunucu hatası",
-                None,
-                500,
-                "Beklenmedik hata durumunda 500 dönmeli.",
-            ),
+            (1, f"{success_code} - Mutlu senaryo",      None,             success_code),
+            (2, "400 - Validasyon hatası",               {"dummy": "invalid"}, 400),
+            (3, "401 - Yetkisiz erişim",                 None,             401),
+            (4, "404 - Kaynak bulunamadı",               None,             404),
+            (5, "500 - Sunucu hatası",                   None,             500),
+        ]
+
+        _results = [
+            "İşlem başarıyla tamamlanmalı.",
+            "Hatalı istek için validasyon hatası dönmeli.",
+            "Yetkisiz kullanıcı için 401 dönmeli.",
+            "Var olmayan kaynak için 404 dönmeli.",
+            "Beklenmedik hata durumunda 500 dönmeli.",
         ]
 
         rows = []
-        for tc_id, title, body, exp_status, exp_result in templates:
-            rows.append(
-                {
-                    "generator": self.GENERATOR_NAME,
-                    "operation_id": op.op_id,
-                    "http_method": op.method,
-                    "path": op.path,
-                    "tc_id": tc_id,
-                    "title": title,
-                    "request_body": json.dumps(body) if body is not None else "",
-                    "expected_status": exp_status,
-                    "expected_result": exp_result,
-                }
+        for (suffix, title, body, exp_status), exp_result in zip(templates, _results):
+            tc = TestCase(
+                generator=self.GENERATOR_NAME,
+                operation_id=op.op_id,
+                http_method=op.method,
+                path=op.path,
+                tc_id=f"{op.op_id}_TC{suffix}",
+                title=title,
+                test_type=_infer_test_type(exp_status, title),
+                request={
+                    "path_params": {},
+                    "query_params": {},
+                    "headers": {},
+                    "cookies": {},
+                    "body": body,
+                },
+                expected={
+                    "status": exp_status,
+                    "allowed_statuses": [exp_status],
+                    "result": exp_result,
+                    "assertions": [],
+                    "response_schema_check": False,
+                },
             )
+            rows.append(tc.to_dict())
         return rows

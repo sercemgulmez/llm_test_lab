@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional
 
-from models import ApiOperation
+from models import ApiOperation, TestCase
 from config import MAX_PARALLEL_WORKERS, RETRY_MAX_ATTEMPTS, RETRY_BACKOFF_SECONDS
 
 
@@ -34,13 +34,46 @@ def _is_non_retryable_generation_error(exc: Exception) -> bool:
     return any(marker in message for marker in _NON_RETRYABLE_ERROR_MARKERS)
 
 
+def _infer_test_type(exp_status: Optional[int], title: str = "") -> str:
+    """Beklenen HTTP statüsü ve başlıktan test türünü çıkarır."""
+    if exp_status is None:
+        return "positive"
+    if exp_status in (401, 403):
+        return "auth"
+    if exp_status == 422:
+        return "contract"
+    if exp_status >= 500:
+        return "error"
+    title_lower = title.lower()
+    if exp_status == 400:
+        if any(kw in title_lower for kw in ("boundary", "sınır", "limit", "max", "min", "edge")):
+            return "boundary"
+        return "negative"
+    if 400 <= exp_status < 500:
+        return "negative"
+    return "positive"
+
+
 def build_llm_prompt(op: ApiOperation, num_cases: int, variant_name: str, variant_desc: str) -> str:
     """Bir API operasyonu için LLM'e gönderilecek token-optimized prompt."""
     extra_parts = []
     if op.description:
         extra_parts.append(op.description)
-    if op.example_body:
-        extra_parts.append(f"Örnek body: {op.example_body}")
+    if op.request_body_examples:
+        example_str = json.dumps(op.request_body_examples[0], ensure_ascii=False)
+        extra_parts.append(f"Örnek body: {example_str}")
+    if op.parameters:
+        param_strs = []
+        for p in op.parameters[:8]:
+            name = p.get("name", "?")
+            in_loc = p.get("in", "query")
+            req = " (zorunlu)" if p.get("required") else ""
+            param_strs.append(f"{name} [{in_loc}{req}]")
+        extra_parts.append(f"Parametreler: {', '.join(param_strs)}")
+    if op.response_schemas:
+        status_list = ", ".join(sorted(op.response_schemas.keys()))
+        extra_parts.append(f"Olası yanıt kodları: {status_list}")
+
     extra_section = ("\n" + "\n".join(extra_parts)) if extra_parts else ""
 
     return f"""Kıdemli Backend QA mühendisi olarak aşağıdaki API operasyonu için TAM OLARAK {num_cases} test senaryosu üret.
@@ -68,14 +101,12 @@ def parse_llm_lines_to_rows(
     op: ApiOperation,
     generator_name: str,
 ) -> List[Dict]:
-    """LLM çıktısındaki pipe-delimited satırları sözlük listesine dönüştürür."""
+    """LLM çıktısındaki pipe-delimited satırları TestCase.to_dict() formatında döner."""
     rows: List[Dict] = []
     for line in lines:
-        # Markdown kod bloğu sınırlarını atla (``` veya ```python vb.)
         if line.startswith("```"):
             continue
 
-        # LLM'in eklediği "1. ", "2) ", "- ", "* " gibi önekleri temizle
         line = _LIST_PREFIX_RE.sub("", line).strip()
         if not line:
             continue
@@ -92,32 +123,46 @@ def parse_llm_lines_to_rows(
             continue
         method, path = mp_parts[0].upper(), mp_parts[1]
 
+        exp_status: Optional[int]
         try:
-            exp_status: object = int(exp_status_str)
+            exp_status = int(exp_status_str)
         except ValueError:
-            exp_status = ""
+            exp_status = None
 
+        body: Optional[dict]
         if body_str == "-":
-            body: Optional[dict] = None
+            body = None
         else:
             try:
-                body = json.loads(body_str)
+                parsed = json.loads(body_str)
+                body = parsed if isinstance(parsed, dict) else None
             except json.JSONDecodeError:
                 body = None
 
-        rows.append(
-            {
-                "generator": generator_name,
-                "operation_id": op.op_id,
-                "http_method": method,
-                "path": path,
-                "tc_id": tc_id,
-                "title": title,
-                "request_body": json.dumps(body) if body is not None else "",
-                "expected_status": exp_status,
-                "expected_result": exp_result,
-            }
+        tc = TestCase(
+            generator=generator_name,
+            operation_id=op.op_id,
+            http_method=method,
+            path=path,
+            tc_id=tc_id,
+            title=title,
+            test_type=_infer_test_type(exp_status, title),
+            request={
+                "path_params": {},
+                "query_params": {},
+                "headers": {},
+                "cookies": {},
+                "body": body,
+            },
+            expected={
+                "status": exp_status,
+                "allowed_statuses": [exp_status] if exp_status is not None else [],
+                "result": exp_result,
+                "assertions": [],
+                "response_schema_check": False,
+            },
         )
+        rows.append(tc.to_dict())
     return rows
 
 

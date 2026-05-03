@@ -84,7 +84,7 @@ def test_build_llm_prompt_and_parse_lines_round_trip():
         path="/login",
         summary="Login",
         description="Authenticate user",
-        example_body='{"phone":"+90555","password":"secret"}',
+        request_body_examples=[{"phone": "+90555", "password": "secret"}],
     )
 
     prompt = build_llm_prompt(op, num_cases=3, variant_name="basic", variant_desc="happy path")

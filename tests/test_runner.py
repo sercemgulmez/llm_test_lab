@@ -6,6 +6,7 @@ from runner import _join_url, run_testcases
 class _DummyResponse:
     def __init__(self, status_code):
         self.status_code = status_code
+        self.text = ""
 
 
 class _DummySession:

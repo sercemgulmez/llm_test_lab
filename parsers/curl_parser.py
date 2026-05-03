@@ -4,7 +4,7 @@ import json
 import re
 import shlex
 from typing import Dict, List, Tuple
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 from models import ApiOperation
 
@@ -26,7 +26,7 @@ def parse_curl(curl_text: str) -> Tuple[ApiOperation, str, Dict[str, str], Dict[
 
     Returns:
         (operation, base_url, headers, cookies)
-        - operation : ApiOperation (example_body ve description dolu)
+        - operation : ApiOperation (request_body_examples ve description dolu)
         - base_url  : "https://host" şeklinde
         - headers   : İstek için gerekli ekstra header dict'i
         - cookies   : Cookie dict'i
@@ -37,7 +37,6 @@ def parse_curl(curl_text: str) -> Tuple[ApiOperation, str, Dict[str, str], Dict[
     try:
         tokens = shlex.split(curl_text)
     except ValueError:
-        # Hatalı quoting varsa boşlukla böl (son çare)
         tokens = curl_text.split()
 
     url = ""
@@ -54,7 +53,6 @@ def parse_curl(curl_text: str) -> Tuple[ApiOperation, str, Dict[str, str], Dict[
             i += 1
             continue
 
-        # URL: - ile başlamayan ve http(s) ile başlayan token
         if not tok.startswith("-") and not url and tok.startswith("http"):
             url = tok.strip("'\"")
             i += 1
@@ -100,15 +98,36 @@ def parse_curl(curl_text: str) -> Tuple[ApiOperation, str, Dict[str, str], Dict[
     if parsed_url.query:
         path += f"?{parsed_url.query}"
 
-    # Body'yi formatla
+    # Request body examples
+    request_body_examples: list[dict] = []
     example_body_str = ""
     if body:
         try:
-            example_body_str = json.dumps(json.loads(body), ensure_ascii=False, indent=2)
+            parsed_body = json.loads(body)
+            example_body_str = json.dumps(parsed_body, ensure_ascii=False, indent=2)
+            if isinstance(parsed_body, dict):
+                request_body_examples = [parsed_body]
         except (json.JSONDecodeError, ValueError):
             example_body_str = body
 
-    # Önemli (non-rutin) header'ları description'a ekle
+    # Query params → parameters list
+    parameters: list[dict] = []
+    if parsed_url.query:
+        for k, v in parse_qs(parsed_url.query, keep_blank_values=True).items():
+            parameters.append({"name": k, "in": "query", "example": v[0] if v else ""})
+
+    # Content-Type header → content_types
+    ct_header = headers.get("Content-Type") or headers.get("content-type") or ""
+    content_types = [ct_header.split(";")[0].strip()] if ct_header else []
+
+    # Authorization header → security
+    auth_header = headers.get("Authorization") or headers.get("authorization") or ""
+    security: list[dict] = []
+    if auth_header:
+        scheme = auth_header.split()[0].lower() if auth_header.split() else "bearer"
+        security = [{scheme: []}]
+
+    # Notable (non-rutin) header'ları description'a ekle
     notable = {k: v for k, v in headers.items() if k.lower() not in _SKIP_HEADERS}
     desc_parts = []
     if notable:
@@ -124,7 +143,11 @@ def parse_curl(curl_text: str) -> Tuple[ApiOperation, str, Dict[str, str], Dict[
         path=path,
         summary=f"{method} {path}",
         description="\n".join(desc_parts),
-        example_body=example_body_str,
+        parameters=parameters,
+        request_body_examples=request_body_examples,
+        content_types=content_types,
+        security=security,
+        servers=[base_url],
     )
 
     return op, base_url, headers, cookies
@@ -136,17 +159,10 @@ def parse_curl_collection(
     """
     Bir metin içindeki birden fazla curl komutunu parse eder.
 
-    curl komutları aşağıdaki ayraçlardan herhangi biriyle ayrılabilir:
-        - Yeni satırda başlayan  curl  komutu
-        - ---  (üç tire)
-        - Boş satır(lar)
-
     Returns:
         Her curl için (operation, base_url, headers, cookies) tuple listesi.
         op_id'ler CURL_OP1, CURL_OP2, ... şeklinde otomatik atanır.
     """
-    # Satır başında 'curl' ile başlayan bloklara böl
-    # (satır devamı \ ile birleştirilmiş çok satırlıları da yakalar)
     blocks = re.split(r"(?m)^(?=curl\s)", text.strip())
     blocks = [b.strip() for b in blocks if b.strip().startswith("curl")]
 

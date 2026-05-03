@@ -16,7 +16,10 @@ def test_parse_curl_extracts_request_metadata():
     assert base_url == "https://api.example.com"
     assert op.method == "POST"
     assert op.path == "/v1/users?id=42"
-    assert op.example_body == '{\n  "name": "Ada"\n}'
+    assert op.request_body_examples == [{"name": "Ada"}]
+    assert op.parameters == [{"name": "id", "in": "query", "example": "42"}]
+    assert op.security == [{"bearer": []}]
+    assert op.servers == ["https://api.example.com"]
     assert headers["Authorization"] == "Bearer abc"
     assert headers["X-Trace-Id"] == "trace-1"
     assert cookies == {"session": "xyz", "theme": "dark"}

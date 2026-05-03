@@ -47,8 +47,9 @@ def save_operations_csv(operations: List[ApiOperation], output_dir: str) -> str:
 
 RESULT_FIELDNAMES = [
     "generator", "operation_id", "http_method", "path",
-    "tc_id", "title", "request_body", "expected_status", "expected_result",
-    "url", "actual_status", "pass", "tokens_used",
+    "tc_id", "title", "test_type", "priority",
+    "request_body", "expected_status", "expected_result",
+    "url", "actual_status", "actual_body", "pass", "tokens_used",
 ]
 
 
@@ -59,7 +60,7 @@ def save_results_csv(rows: List[Dict], output_dir: str) -> str:
     path = os.path.join(output_dir, f"executed_testcases_{_timestamp()}.csv")
     _ensure_dir(path)
     with open(path, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=RESULT_FIELDNAMES, extrasaction="ignore")
+        w = csv.DictWriter(f, fieldnames=RESULT_FIELDNAMES, extrasaction="ignore", restval="")
         w.writeheader()
         for r in rows:
             w.writerow(r)
