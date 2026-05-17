@@ -1,6 +1,10 @@
 # Ortam değişkenleri (API anahtarları burada)
 .env
 
+# Kişisel / dahili belgeler
+CLAUDE.md
+COMPARISON_GUIDE.md
+
 # Python sanal ortamlar
 venv/
 .venv/
