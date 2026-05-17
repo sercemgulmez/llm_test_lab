@@ -1,5 +1,9 @@
 """Merkezi yapılandırma sabitleri."""
 
+from __future__ import annotations
+
+from pathlib import Path
+
 # OpenAI (GPT) modelleri
 OPENAI_MODELS = [
     "gpt-4.1-mini",
@@ -42,6 +46,21 @@ MAX_CASES_PER_OPERATION: int | None = None
 
 # Varsayılan çıktı klasörü
 OUTPUT_DIR: str = "outputs"
+
+# Web UI runtime güvenlik sınırları
+PROJECT_ROOT: Path = Path(__file__).resolve().parent
+UPLOAD_DIR: str = "uploads"
+ALLOWED_UPLOAD_EXTENSIONS: set[str] = {".txt", ".curl", ".http"}
+MAX_UPLOAD_BYTES: int = 1 * 1024 * 1024
+JOB_ID_BYTES: int = 16
+JOB_TOKEN_BYTES: int = 24
+
+# Çıktılar varsayılan olarak proje kökü altında tutulur. Mutlak path verilirse
+# bu kökün altında kalması gerekir.
+ALLOWED_OUTPUT_ROOTS: tuple[Path, ...] = (PROJECT_ROOT,)
+
+# Web UI aynı anda tek uzun iş çalıştıracak şekilde tasarlandı.
+MAX_PARALLEL_JOBS: int = 1
 
 # HTTP istek zaman aşımı (saniye)
 REQUEST_TIMEOUT: int = 10

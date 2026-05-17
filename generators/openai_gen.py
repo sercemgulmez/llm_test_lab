@@ -1,5 +1,7 @@
 """OpenAI Chat Completions API ve uyumlu endpoint'ler için test senaryosu üreticisi."""
 
+from __future__ import annotations
+
 import os
 from typing import Dict, List
 

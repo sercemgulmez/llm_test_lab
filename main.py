@@ -7,8 +7,13 @@ Kullanım:
     python main.py --help                   # Tüm seçenekler
 """
 
+from __future__ import annotations
+
 import argparse
+from datetime import datetime, timezone
+import json
 import os
+from pathlib import Path
 import sys
 
 from dotenv import load_dotenv
@@ -368,6 +373,50 @@ def _parse_cli_cookies(cookie_str: str) -> dict:
     return result
 
 
+def _resolve_safe_output_dir(output_dir: str) -> str:
+    raw = (output_dir or config.OUTPUT_DIR).strip() or config.OUTPUT_DIR
+    candidate = Path(raw).expanduser()
+    if not candidate.is_absolute():
+        candidate = config.PROJECT_ROOT / candidate
+    resolved = candidate.resolve()
+    allowed_roots = [root.resolve() for root in config.ALLOWED_OUTPUT_ROOTS]
+    if not any(resolved == root or root in resolved.parents for root in allowed_roots):
+        allowed = ", ".join(str(root) for root in allowed_roots)
+        raise ValueError(f"Çıktı klasörü izin verilen köklerin altında olmalı: {allowed}")
+    return str(resolved)
+
+
+def _save_cli_run_info(args: argparse.Namespace, operations: list, output_dir: str, selected_keys: list | None) -> str:
+    metadata = {
+        "job_id": "cli",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "source": "curl" if args.curl_file else "openapi" if args.openapi_url else "manual",
+        "base_url": args.base_url,
+        "no_run": bool(args.no_run),
+        "output_dir": output_dir,
+        "selected_generators": selected_keys or ["all"],
+        "prompt_variants": dict(config.PROMPT_VARIANTS),
+        "num_cases_per_operation": getattr(args, "num_cases", config.NUM_CASES_PER_OPERATION),
+        "operation_count": len(operations),
+        "operation_ids": [getattr(op, "op_id", "") for op in operations],
+        "config_snapshot": {
+            "openai_models": config.OPENAI_MODELS,
+            "gemini_models": config.GEMINI_MODELS,
+            "claude_models": config.CLAUDE_MODELS,
+            "groq_models": config.GROQ_MODELS,
+            "request_timeout": config.REQUEST_TIMEOUT,
+            "retry_max_attempts": config.RETRY_MAX_ATTEMPTS,
+            "retry_backoff_seconds": config.RETRY_BACKOFF_SECONDS,
+            "max_parallel_workers": config.MAX_PARALLEL_WORKERS,
+        },
+    }
+    path = Path(output_dir) / f"run_info_cli_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"Run metadata kaydedildi: {path}")
+    return str(path)
+
+
 # ── Ana akış ─────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -378,6 +427,12 @@ def main() -> None:
         args = interactive_wizard()
     else:
         args = parse_args()
+
+    try:
+        args.output_dir = _resolve_safe_output_dir(args.output_dir)
+    except ValueError as e:
+        print(f"HATA: {e}", file=sys.stderr)
+        sys.exit(1)
 
     # ── Header / Cookie hazırlığı ────────────────────────────────────────
     extra_headers = _parse_cli_headers(args.headers)
@@ -456,6 +511,7 @@ def main() -> None:
     all_rows: list = []
     selected_keys = getattr(args, "selected_generators", None)
     num_cases = getattr(args, "num_cases", config.NUM_CASES_PER_OPERATION)
+    _save_cli_run_info(args, operations, args.output_dir, selected_keys)
 
     # Geleneksel şablon
     if selected_keys is None or "traditional" in selected_keys:

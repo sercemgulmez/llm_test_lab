@@ -16,6 +16,8 @@ __pycache__/
 
 # Çıktı dosyaları
 outputs/
+uploads/
+çıktı/
 test_tmp/
 pytest-cache-files-*/
 pytest_work/

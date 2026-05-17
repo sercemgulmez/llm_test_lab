@@ -184,6 +184,7 @@ Kullanılan değişkenler:
 - `OPENAI_API_KEY`
 - `GEMINI_API_KEY`
 - `ANTHROPIC_API_KEY`
+- `GROQ_API_KEY`
 
 Not:
 
@@ -219,6 +220,12 @@ python -m pip install --upgrade pip
 
 ```powershell
 pip install -r requirements.txt
+```
+
+Alternatif olarak proje metadata'sı üzerinden geliştirme bağımlılıklarıyla kurulum:
+
+```powershell
+pip install -e ".[dev]"
 ```
 
 ### 6. Ortam dosyasını oluştur
@@ -320,6 +327,18 @@ outputs/
 - `operations.csv`
 - `executed_testcases_<timestamp>.csv`
 - `generator_metrics_<timestamp>.csv`
+- `run_info_<job_id>_<timestamp>.json`
+
+`run_info` dosyası seçilen modelleri, prompt varyantlarını, operasyon sayısını, senaryo sayısını ve çalışma zamanı config özetini saklar. Bu dosya deneylerin daha sonra aynı koşullarla tekrarlanabilmesi için eklenmiştir.
+
+## Web UI Güvenlik ve İş Yönetimi
+
+- Upload dosyaları yalnızca `.txt`, `.curl` ve `.http` uzantılarıyla kabul edilir.
+- Varsayılan upload limiti 1 MB'dir.
+- Web UI job sonuçları job token ile korunur; UI bu token'ı otomatik kullanır.
+- Çalışan job için iptal isteği gönderilebilir; iş en yakın güvenli durma noktasında `cancelled` durumuna geçer.
+- `/health` endpoint'i uygulama durumunu döner.
+- `/download_report/<job_id>` endpoint'i CSV sonuçları, metadata ve JSON özetleri içeren ZIP rapor paketi üretir.
 
 ## CI Nasıl Çalışır?
 
