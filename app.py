@@ -12,6 +12,7 @@ import csv
 from datetime import datetime, timezone
 import io
 import json
+import logging
 import os
 from pathlib import Path
 import queue
@@ -35,22 +36,21 @@ from security.redaction import redact_secrets
 
 load_dotenv()
 
-import config
-from generators.claude_gen import ClaudeGenerator
-from generators.groq_gen import GroqGenerator
-from generators.gemini_gen import GeminiGenerator
-from generators.openai_gen import OpenAIGenerator
-from generators.traditional import TraditionalGenerator
-from parsers.curl_parser import parse_curl_collection
-from parsers.openapi import extract_operations_from_openapi, load_openapi_from_url
-from reporters.csv_reporter import (
+import config  # noqa: E402
+from generators import TraditionalGenerator, GENERATOR_REGISTRY  # noqa: E402
+from parsers.curl_parser import parse_curl_collection  # noqa: E402
+from parsers.openapi import extract_operations_from_openapi, load_openapi_from_url  # noqa: E402
+from reporters.csv_reporter import (  # noqa: E402
     build_comparison_summary,
     compute_generator_metrics,
     save_generator_metrics_csv,
     save_operations_csv,
     save_results_csv,
 )
-from runner import run_testcases
+from runner import run_testcases  # noqa: E402
+
+_logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = config.MAX_UPLOAD_BYTES
@@ -76,7 +76,7 @@ def _resolve_upload_folder() -> str:
 
 UPLOAD_FOLDER = _resolve_upload_folder()
 if UPLOAD_FOLDER != config.UPLOAD_DIR:
-    print(f"UYARI: '{config.UPLOAD_DIR}' klasörü yazılabilir değil; '{UPLOAD_FOLDER}' kullanılacak.")
+    _logger.warning("UYARI: '%s' klasörü yazılabilir değil; '%s' kullanılacak.", config.UPLOAD_DIR, UPLOAD_FOLDER)
 
 # ── İş durumu ────────────────────────────────────────────────────────────────
 _jobs: dict = {}
@@ -108,6 +108,23 @@ class _LogCapture:
 
     def flush(self):
         _orig_stdout.flush()
+
+
+class _QueueLogHandler(logging.Handler):
+    """logging çıktısını SSE kuyruğuna yönlendirir; iş süresi boyunca root logger'a eklenir."""
+
+    def __init__(self, q: queue.Queue):
+        super().__init__()
+        self.q = q
+        self.setFormatter(logging.Formatter("%(message)s"))
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = self.format(record)
+            if msg.strip():
+                self.q.put({"type": "log", "text": msg})
+        except Exception:
+            self.handleError(record)
 
 
 def _parse_header_lines(header_lines: list[str]) -> dict[str, str]:
@@ -238,7 +255,7 @@ def _save_run_metadata(metadata: dict, output_dir: str) -> str:
     path = Path(output_dir) / f"run_info_{metadata.get('job_id') or 'manual'}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"Run metadata kaydedildi: {path}")
+    _logger.info("Run metadata kaydedildi: %s", path)
     return str(path)
 
 
@@ -441,7 +458,7 @@ def _execute_pipeline(data: dict) -> dict:
             extra_headers = {**curl_hdrs, **extra_headers}
             operations.append(op)
         base_url = base_url or derived_base
-        print(f"{len(operations)} curl operasyonu parse edildi.")
+        _logger.info("%d curl operasyonu parse edildi.", len(operations))
 
     elif source == "openapi":
         openapi_url = (data.get("openapi_url") or "").strip()
@@ -453,7 +470,7 @@ def _execute_pipeline(data: dict) -> dict:
             cookies=cookies or None,
         )
         operations = extract_operations_from_openapi(spec)
-        print(f"{len(operations)} operasyon çıkarıldı.")
+        _logger.info("%d operasyon çıkarıldı.", len(operations))
     else:
         raise ValueError(f"Desteklenmeyen kaynak türü: {source}")
 
@@ -488,13 +505,23 @@ def _execute_pipeline(data: dict) -> dict:
         rows = trad.generate(operations, "", "", num_cases)
         all_rows.extend(rows)
         generation_summaries.extend(getattr(trad, "_generation_summaries", []))
-        print(f"[Geleneksel] {len(rows)} senaryo üretildi.")
+        _logger.info("[Geleneksel] %d senaryo üretildi.", len(rows))
 
     def _run_llm(gen_instance, model_name: str, provider: str):
+        # Pre-flight: API anahtarının env'de var olup olmadığını doğrula
+        try:
+            gen_instance._get_client()
+        except RuntimeError as e:
+            _logger.warning("[%s %s] ATLANADI — %s", provider, model_name, e)
+            return
+
         for v_name, v_desc in config.PROMPT_VARIANTS.items():
             _raise_if_cancelled(job_id)
             if gen_instance._aborted:
-                print(f"[{provider} {model_name} / {v_name}] kredi/auth hatası nedeniyle atlandı.")
+                _logger.warning(
+                    "[%s %s / %s] ⚠ Bu model daha önce API hatası aldı ve atlandı. Lütfen %s anahtarınızı kontrol edin.",
+                    provider, model_name, v_name, provider,
+                )
                 continue
             try:
                 rows = gen_instance.generate(
@@ -505,33 +532,33 @@ def _execute_pipeline(data: dict) -> dict:
                 )
                 all_rows.extend(rows)
                 generation_summaries.extend(getattr(gen_instance, "_generation_summaries", []))
-                print(f"[{provider} {model_name} / {v_name}] {len(rows)} senaryo üretildi.")
+                _logger.info("[%s %s / %s] %d senaryo üretildi.", provider, model_name, v_name, len(rows))
             except RuntimeError as e:
-                print(f"UYARI [{provider} {model_name}]: {e} — atlandı.")
+                _logger.warning("UYARI [%s %s]: %s — atlandı.", provider, model_name, e)
 
-    for m in config.OPENAI_MODELS:
-        if not selected_keys or f"openai:{m}" in selected_keys:
-            _run_llm(OpenAIGenerator(m), m, "OpenAI")
+    for key, (cls, model, provider) in GENERATOR_REGISTRY.items():
+        if key == "traditional":
+            continue
+        if not selected_keys or key in selected_keys:
+            _run_llm(cls(model), model, provider)
 
-    for m in config.GEMINI_MODELS:
-        if not selected_keys or f"gemini:{m}" in selected_keys:
-            _run_llm(GeminiGenerator(m), m, "Gemini")
+    if generation_summaries:
+        _logger.info("\n── Üretim Özeti ──")
+        for summary in generation_summaries:
+            gen = summary.get("generator", "?")
+            req = summary.get("requested_cases", 0)
+            valid = summary.get("valid_cases", 0)
+            fallback = summary.get("fallback_cases", 0)
+            status = "✓" if fallback == 0 else f"{fallback} fallback"
+            _logger.info("  %s: %d/%d case (%s)", gen, valid, req, status)
 
-    for m in config.CLAUDE_MODELS:
-        if not selected_keys or f"claude:{m}" in selected_keys:
-            _run_llm(ClaudeGenerator(m), m, "Claude")
-
-    for m in config.GROQ_MODELS:
-        if not selected_keys or f"groq:{m}" in selected_keys:
-            _run_llm(GroqGenerator(m), m, "Groq")
-
-    print(f"\nToplam {len(all_rows)} test senaryosu üretildi.")
+    _logger.info("\nToplam %d test senaryosu üretildi.", len(all_rows))
 
     # Test çalıştırma
     _raise_if_cancelled(job_id)
     if no_run:
         executed_rows = all_rows
-        print("Testler çalıştırılmıyor (no_run aktif).")
+        _logger.info("Testler çalıştırılmıyor (no_run aktif).")
     else:
         executed_rows = run_testcases(
             base_url, all_rows,
@@ -555,7 +582,7 @@ def _execute_pipeline(data: dict) -> dict:
     if not no_run:
         save_generator_metrics_csv(metrics, output_dir)
 
-    print(f"\nTamamlandı! Çıktılar: {output_dir}/")
+    _logger.info("\nTamamlandı! Çıktılar: %s/", output_dir)
     return {
         "result_file": result_path,
         "run_info": run_metadata,
@@ -571,6 +598,8 @@ def _job_thread(job_id: str, data: dict):
     q = _jobs[job_id]["log_queue"]
     orig = sys.stdout
     sys.stdout = _LogCapture(q)
+    log_handler = _QueueLogHandler(q)
+    logging.root.addHandler(log_handler)
     try:
         data = dict(data)
         data["_job_id"] = job_id
@@ -594,6 +623,7 @@ def _job_thread(job_id: str, data: dict):
                 _jobs[job_id]["status"] = "error"
             _jobs[job_id]["error"] = message
     finally:
+        logging.root.removeHandler(log_handler)
         sys.stdout = orig
         _running.clear()
         q.put(None)  # sentinel — SSE akışını bitirir

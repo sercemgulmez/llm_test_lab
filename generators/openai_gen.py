@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Dict, List
 
+import config
 from models import ApiOperation
 from generators.base import BaseGenerator
 from security.secret_loader import get_api_key_from_env
+
+_logger = logging.getLogger(__name__)
 
 try:
     from openai import OpenAI  # type: ignore
@@ -45,10 +49,11 @@ class OpenAIGenerator(BaseGenerator):
     ) -> List[Dict]:
         client = self._get_client()
         generator_name = f"LLM-{self._provider_label}-{self.model}-{variant_name}"
-        print(f"[{self._provider_label} - {self.model} - {variant_name}] {op.op_id} ({op.method} {op.path}) üretiliyor...")
+        _logger.info("[%s - %s - %s] %s (%s %s) üretiliyor...", self._provider_label, self.model, variant_name, op.op_id, op.method, op.path)
 
         def request_completion(prompt: str) -> tuple[str, int]:
-            max_tokens = min(16384, max(2048, num_cases * 200))
+            token_ceiling = config.MAX_TOKENS_BY_PROVIDER.get(self._provider_label.lower(), 16384)
+            max_tokens = min(token_ceiling, max(2048, num_cases * 200))
             resp = client.chat.completions.create(
                 model=self.model,
                 max_tokens=max_tokens,

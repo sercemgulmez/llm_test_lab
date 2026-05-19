@@ -73,6 +73,15 @@ RETRY_BACKOFF_SECONDS: float = 8.0
 # LLM operasyonları için paralel thread sayısı (I/O-bound API çağrıları)
 MAX_PARALLEL_WORKERS: int = 5
 
+# Provider başına max_tokens üst sınırı
+# Groq ücretsiz tier 8192 ile sınırlı; OpenAI 16384'e kadar izin verir.
+MAX_TOKENS_BY_PROVIDER: dict[str, int] = {
+    "openai": 16384,
+    "gemini":  8192,
+    "claude":  8192,
+    "groq":    8192,
+}
+
 
 def normalize_num_cases(value: object, default: int = NUM_CASES_PER_OPERATION) -> int:
     """Pozitif testcase sayısı döner; geçersiz girişte default kullanır."""

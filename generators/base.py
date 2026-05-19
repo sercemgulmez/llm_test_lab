@@ -1,6 +1,7 @@
 """Tum generator'lar icin soyut temel sinif ve ortak yardimcilar."""
 
 import json
+import logging
 import re
 import time
 from abc import ABC, abstractmethod
@@ -10,6 +11,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from config import MAX_PARALLEL_WORKERS, RETRY_BACKOFF_SECONDS, RETRY_MAX_ATTEMPTS
 from models import ApiOperation, TestCase
 from security.redaction import redact_secrets
+
+_logger = logging.getLogger(__name__)
 
 
 _NON_RETRYABLE_ERROR_MARKERS = (
@@ -396,7 +399,7 @@ def parse_llm_json_to_rows(text: str, op: ApiOperation, generator_name: str) -> 
             for case in cases
             if isinstance(case, dict)
         ]
-    lines = [s for l in text.splitlines() if (s := l.strip())]
+    lines = [s for line in text.splitlines() if (s := line.strip())]
     return parse_llm_lines_to_rows(lines, op, generator_name)
 
 
@@ -687,10 +690,13 @@ class BaseGenerator(ABC):
             }
         )
 
-        print(
-            f"  requested_cases={num_cases} parsed_cases={total_parsed_cases} "
-            f"valid_cases={len(final_rows) - len(fallback_rows)} repaired_cases={repair_added} "
-            f"fallback_cases={len(fallback_rows)}"
+        _logger.info(
+            "  requested_cases=%d parsed_cases=%d valid_cases=%d repaired_cases=%d fallback_cases=%d",
+            num_cases,
+            total_parsed_cases,
+            len(final_rows) - len(fallback_rows),
+            repair_added,
+            len(fallback_rows),
         )
         return final_rows
 
@@ -709,19 +715,20 @@ class BaseGenerator(ABC):
                 return self._generate_for_operation(op, variant_name, variant_desc, num_cases)
             except Exception as exc:
                 safe_exc = redact_secrets(str(exc))
-                if _is_non_retryable_generation_error(exc):
+                is_missing_key = isinstance(exc, RuntimeError) and "environment variable is not set" in str(exc)
+                if is_missing_key or _is_non_retryable_generation_error(exc):
                     self._aborted = True
-                    print(f"  [HATA] {op.op_id} kalici provider veya kredi hatasi - generator iptal edildi: {safe_exc}")
+                    _logger.error("  [HATA] %s — generator iptal edildi: %s", op.op_id, safe_exc)
                     break
                 if attempt < RETRY_MAX_ATTEMPTS:
                     wait = RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1))
-                    print(
-                        f"  [RETRY {attempt}/{RETRY_MAX_ATTEMPTS}] {op.op_id} hata: {safe_exc} "
-                        f"- {wait:.1f}s bekleyip tekrar deneniyor..."
+                    _logger.warning(
+                        "  [RETRY %d/%d] %s hata: %s - %.1fs bekleyip tekrar deneniyor...",
+                        attempt, RETRY_MAX_ATTEMPTS, op.op_id, safe_exc, wait,
                     )
                     time.sleep(wait)
                 else:
-                    print(f"  [HATA] {op.op_id} tum denemeler basarisiz: {safe_exc}")
+                    _logger.error("  [HATA] %s tum denemeler basarisiz: %s", op.op_id, safe_exc)
         return []
 
     @abstractmethod

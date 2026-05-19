@@ -1,10 +1,14 @@
 """Anthropic Claude tabanlı test senaryosu üreticisi."""
 
+import logging
 from typing import Dict, List
 
+import config
 from models import ApiOperation
 from generators.base import BaseGenerator
 from security.secret_loader import get_api_key
+
+_logger = logging.getLogger(__name__)
 
 try:
     import anthropic  # type: ignore
@@ -36,10 +40,11 @@ class ClaudeGenerator(BaseGenerator):
     ) -> List[Dict]:
         client = self._get_client()
         generator_name = f"LLM-Claude-{self.model}-{variant_name}"
-        print(f"[Claude - {self.model} - {variant_name}] {op.op_id} ({op.method} {op.path}) üretiliyor...")
+        _logger.info("[Claude - %s - %s] %s (%s %s) üretiliyor...", self.model, variant_name, op.op_id, op.method, op.path)
 
         def request_completion(prompt: str) -> tuple[str, int]:
-            max_tokens = min(8192, max(2048, num_cases * 200))
+            token_ceiling = config.MAX_TOKENS_BY_PROVIDER.get("claude", 8192)
+            max_tokens = min(token_ceiling, max(2048, num_cases * 200))
             message = client.messages.create(
                 model=self.model,
                 max_tokens=max_tokens,

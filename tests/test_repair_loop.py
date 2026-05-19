@@ -76,7 +76,8 @@ class DummyRepairGenerator(BaseGenerator):
         )
 
 
-def test_repair_and_fallback_fill_missing_cases(capsys):
+def test_repair_and_fallback_fill_missing_cases(caplog):
+    import logging
     op = _repair_operation()
     first_batch = json.dumps([_case(op, index) for index in range(1, 7)])
     repair_batch = json.dumps(
@@ -90,14 +91,15 @@ def test_repair_and_fallback_fill_missing_cases(capsys):
     final_empty_repair = "[]"
 
     gen = DummyRepairGenerator([first_batch, repair_batch, final_empty_repair])
-    rows = gen.generate([op], "basic", "repair", 10)
-    captured = capsys.readouterr().out
+    with caplog.at_level(logging.INFO, logger="generators.base"):
+        rows = gen.generate([op], "basic", "repair", 10)
+    log_text = caplog.text
 
     assert len(rows) == 10
     assert len({row["tc_id"] for row in rows}) == 10
     assert rows[0]["generator"] == "LLM-Dummy-basic"
-    assert "requested_cases=10" in captured
-    assert "fallback_cases=2" in captured
+    assert "requested_cases=10" in log_text
+    assert "fallback_cases=2" in log_text
 
 
 def test_fallback_completes_requested_missing_count():

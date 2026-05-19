@@ -1,6 +1,7 @@
 """Execute generated test scenarios against the target API."""
 
 import json
+import logging
 import re
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode, urlsplit, urlunsplit
@@ -8,6 +9,8 @@ from urllib.parse import urlencode, urlsplit, urlunsplit
 import requests
 
 from config import REQUEST_TIMEOUT
+
+_logger = logging.getLogger(__name__)
 
 
 _PATH_PARAM_RE = re.compile(r"\{([^{}]+)\}")
@@ -280,7 +283,7 @@ def run_testcases(
 
     Returns each row with `url`, `actual_status`, `actual_body`, `assertion_results`, and `pass`.
     """
-    print("\n=== Test senaryolari calistiriliyor ===")
+    _logger.info("\n=== Test senaryolari calistiriliyor ===")
     session = requests.Session()
 
     if auth_token:
@@ -334,12 +337,10 @@ def run_testcases(
                 passed = None
                 if _is_blocked_network_error(exc):
                     skip_remaining_due_to_network_block = True
-                    print(
-                        f"  {row['tc_id']} istegi hata verdi: Ortam dis aga erisime izin vermiyor ({exc})."
-                    )
-                    print("  Kalan testler ayni ag erisim engeli nedeniyle calistirilmadan isaretlenecek.")
+                    _logger.warning("  %s istegi hata verdi: Ortam dis aga erisime izin vermiyor (%s).", row['tc_id'], exc)
+                    _logger.warning("  Kalan testler ayni ag erisim engeli nedeniyle calistirilmadan isaretlenecek.")
                 else:
-                    print(f"  {row['tc_id']} istegi hata verdi: {exc}")
+                    _logger.warning("  %s istegi hata verdi: %s", row['tc_id'], exc)
 
         new_row = dict(row)
         new_row["url"] = full_url

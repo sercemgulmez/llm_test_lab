@@ -1,10 +1,13 @@
 """Google Gemini tabanlı test senaryosu üreticisi."""
 
+import logging
 from typing import Dict, List
 
 from models import ApiOperation
 from generators.base import BaseGenerator
 from security.secret_loader import get_api_key
+
+_logger = logging.getLogger(__name__)
 
 try:
     from google import genai  # type: ignore
@@ -36,7 +39,7 @@ class GeminiGenerator(BaseGenerator):
     ) -> List[Dict]:
         client = self._get_client()
         generator_name = f"LLM-Gemini-{self.model}-{variant_name}"
-        print(f"[Gemini - {self.model} - {variant_name}] {op.op_id} ({op.method} {op.path}) üretiliyor...")
+        _logger.info("[Gemini - %s - %s] %s (%s %s) üretiliyor...", self.model, variant_name, op.op_id, op.method, op.path)
 
         def request_completion(prompt: str) -> tuple[str, int]:
             resp = client.models.generate_content(model=self.model, contents=prompt)

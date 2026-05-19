@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import json
+import logging
 import os
 from pathlib import Path
 import sys
@@ -21,11 +22,7 @@ from dotenv import load_dotenv
 import config
 from parsers.openapi import load_openapi_from_url, extract_operations_from_openapi, manual_operations_input
 from parsers.curl_parser import parse_curl_collection
-from generators.traditional import TraditionalGenerator
-from generators.openai_gen import OpenAIGenerator
-from generators.gemini_gen import GeminiGenerator
-from generators.claude_gen import ClaudeGenerator
-from generators.groq_gen import GroqGenerator
+from generators import TraditionalGenerator, GENERATOR_REGISTRY
 from runner import run_testcases
 from reporters.csv_reporter import (
     save_operations_csv,
@@ -34,6 +31,19 @@ from reporters.csv_reporter import (
     save_generator_metrics_csv,
     print_summary_table,
 )
+
+_logger = logging.getLogger(__name__)
+
+
+def _configure_logging(verbose: bool = False) -> None:
+    """Root logger'ı stdout'a yönlendirir; main.py CLI akışı için."""
+    level = logging.DEBUG if verbose else logging.INFO
+    root = logging.getLogger()
+    root.setLevel(level)
+    if not root.handlers:
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        root.addHandler(handler)
 
 
 # ── Wizard yardımcı fonksiyonları ────────────────────────────────────────────
@@ -71,7 +81,7 @@ def _wms(prompt: str, options: list) -> list:
     print()
     for i, opt in enumerate(options, 1):
         print(f"    {i:2}) {opt}")
-    print(f"     A) Tümünü seç")
+    print("     A) Tümünü seç")
     print()
     while True:
         try:
@@ -220,7 +230,7 @@ def interactive_wizard() -> argparse.Namespace:
     # ── Adım 4: Senaryo sayısı ────────────────────────────────────────────
     _separator("ADIM 4 — Senaryo Sayısı")
     print()
-    print(f"  Her operasyon için kaç LLM test senaryosu üretilsin?")
+    print("  Her operasyon için kaç LLM test senaryosu üretilsin?")
     num_cases_str = _wi("Senaryo sayısı", str(config.NUM_CASES_PER_OPERATION))
     num_cases = config.normalize_num_cases(num_cases_str)
 
@@ -245,14 +255,14 @@ def interactive_wizard() -> argparse.Namespace:
     elif openapi_url:
         print(f"  Kaynak       : OpenAPI ({openapi_url})")
     else:
-        print(f"  Kaynak       : Manuel giriş")
+        print("  Kaynak       : Manuel giriş")
 
     base_display = base_url or "(curl'den otomatik alınacak)"
     print(f"  Base URL     : {base_display}")
     print(f"  Auth Token   : {'Var' if auth_token else 'Yok'}")
     print(f"  Ekstra Header: {len(extra_headers_raw)} adet")
     print(f"  Cookie       : {'Var' if cookie_str else 'Yok'}")
-    print(f"  Generator    :")
+    print("  Generator    :")
     for i in selected_indices:
         print(f"               - {gen_options[i].strip()}")
     print(f"  Senaryo/op   : {num_cases}")
@@ -332,26 +342,14 @@ def _build_llm_generators(selected_keys: list = None) -> list:
     selected_keys: ["openai:gpt-4.1-mini", "gemini:...", "claude:...", "groq:..."]
                    None ise tümü dahil edilir.
     """
-    def _include(key: str) -> bool:
-        return selected_keys is None or key in selected_keys
-
     generators = []
-    for model in config.OPENAI_MODELS:
-        if _include(f"openai:{model}"):
-            for v_name, v_desc in config.PROMPT_VARIANTS.items():
-                generators.append((OpenAIGenerator(model), v_name, v_desc))
-    for model in config.GEMINI_MODELS:
-        if _include(f"gemini:{model}"):
-            for v_name, v_desc in config.PROMPT_VARIANTS.items():
-                generators.append((GeminiGenerator(model), v_name, v_desc))
-    for model in config.CLAUDE_MODELS:
-        if _include(f"claude:{model}"):
-            for v_name, v_desc in config.PROMPT_VARIANTS.items():
-                generators.append((ClaudeGenerator(model), v_name, v_desc))
-    for model in config.GROQ_MODELS:
-        if _include(f"groq:{model}"):
-            for v_name, v_desc in config.PROMPT_VARIANTS.items():
-                generators.append((GroqGenerator(model), v_name, v_desc))
+    for key, (cls, model, _provider) in GENERATOR_REGISTRY.items():
+        if key == "traditional":
+            continue
+        if selected_keys is not None and key not in selected_keys:
+            continue
+        for v_name, v_desc in config.PROMPT_VARIANTS.items():
+            generators.append((cls(model), v_name, v_desc))
     return generators
 
 
@@ -413,13 +411,14 @@ def _save_cli_run_info(args: argparse.Namespace, operations: list, output_dir: s
     path = Path(output_dir) / f"run_info_cli_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"Run metadata kaydedildi: {path}")
+    _logger.info("Run metadata kaydedildi: %s", path)
     return str(path)
 
 
 # ── Ana akış ─────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    _configure_logging()
     load_dotenv()
 
     # Argüman yoksa interaktif wizard
@@ -431,7 +430,7 @@ def main() -> None:
     try:
         args.output_dir = _resolve_safe_output_dir(args.output_dir)
     except ValueError as e:
-        print(f"HATA: {e}", file=sys.stderr)
+        _logger.error("HATA: %s", e)
         sys.exit(1)
 
     # ── Header / Cookie hazırlığı ────────────────────────────────────────
@@ -449,29 +448,27 @@ def main() -> None:
                 with open(filepath, "r", encoding="utf-8") as f:
                     curl_text = f.read()
             except OSError as e:
-                print(f"HATA: curl dosyası okunamadı ({filepath}): {e}", file=sys.stderr)
+                _logger.error("HATA: curl dosyası okunamadı (%s): %s", filepath, e)
                 sys.exit(1)
             try:
                 parsed_list = parse_curl_collection(curl_text)
             except ValueError as e:
-                print(f"HATA: curl parse edilemedi ({filepath}): {e}", file=sys.stderr)
+                _logger.error("HATA: curl parse edilemedi (%s): %s", filepath, e)
                 sys.exit(1)
             for op, op_base_url, curl_headers, curl_cookies in parsed_list:
                 if derived_base_url is None:
                     derived_base_url = op_base_url
                 elif op_base_url != derived_base_url:
-                    print(f"UYARI: {op.op_id} farklı host ({op_base_url}), "
-                          f"base URL olarak {derived_base_url} kullanılıyor.")
+                    _logger.warning("UYARI: %s farklı host (%s), base URL olarak %s kullanılıyor.", op.op_id, op_base_url, derived_base_url)
                 cookies = {**curl_cookies, **cookies}
                 extra_headers = {**curl_headers, **extra_headers}
                 operations.append(op)
         base_url = base_url or derived_base_url
-        print(f"{len(operations)} curl operasyonu parse edildi: "
-              + ", ".join(f"{op.method} {op.path}" for op in operations))
+        _logger.info("%d curl operasyonu parse edildi: %s", len(operations), ", ".join(f"{op.method} {op.path}" for op in operations))
 
     elif args.openapi_url:
         if not base_url:
-            print("HATA: --openapi-url ile birlikte --base-url da verilmeli.", file=sys.stderr)
+            _logger.error("HATA: --openapi-url ile birlikte --base-url da verilmeli.")
             sys.exit(1)
         try:
             spec = load_openapi_from_url(
@@ -480,20 +477,20 @@ def main() -> None:
                 cookies=cookies or None,
             )
         except Exception as e:
-            print(f"HATA: OpenAPI dokümanı yüklenemedi: {e}", file=sys.stderr)
+            _logger.error("HATA: OpenAPI dokümanı yüklenemedi: %s", e)
             sys.exit(1)
         operations = extract_operations_from_openapi(spec)
-        print(f"{len(operations)} operasyon çıkarıldı.")
+        _logger.info("%d operasyon çıkarıldı.", len(operations))
 
     else:
         if not base_url:
-            print("HATA: --base-url veya --curl-file argümanlarından biri zorunludur.", file=sys.stderr)
+            _logger.error("HATA: --base-url veya --curl-file argümanlarından biri zorunludur.")
             sys.exit(1)
         operations = manual_operations_input()
-        print(f"{len(operations)} operasyon girildi.")
+        _logger.info("%d operasyon girildi.", len(operations))
 
     if not operations:
-        print("Operasyon bulunamadı, program sonlandırılıyor.")
+        _logger.info("Operasyon bulunamadı, program sonlandırılıyor.")
         sys.exit(0)
 
     print()
@@ -518,12 +515,12 @@ def main() -> None:
         trad_gen = TraditionalGenerator()
         trad_rows = trad_gen.generate(operations, "", "", num_cases)
         all_rows.extend(trad_rows)
-        print(f"  [Geleneksel] {len(trad_rows)} senaryo üretildi.")
+        _logger.info("  [Geleneksel] %d senaryo üretildi.", len(trad_rows))
 
     # LLM tabanlı generator'lar
     for gen_instance, v_name, v_desc in _build_llm_generators(selected_keys):
         gen_label = f"{type(gen_instance).__name__} ({v_name})"
-        print(f"  [{gen_label}] üretiliyor...", end=" ", flush=True)
+        _logger.info("  [%s] üretiliyor...", gen_label)
         try:
             rows = gen_instance.generate(
                 operations,
@@ -532,16 +529,15 @@ def main() -> None:
                 num_cases=num_cases,
             )
             all_rows.extend(rows)
-            print(f"{len(rows)} senaryo.")
+            _logger.info("  [%s] %d senaryo üretildi.", gen_label, len(rows))
         except RuntimeError as e:
-            print(f"ATILDI — {e}")
+            _logger.warning("  [%s] ATILDI — %s", gen_label, e)
 
-    print()
-    print(f"Toplam {len(all_rows)} test senaryosu üretildi.")
+    _logger.info("\nToplam %d test senaryosu üretildi.", len(all_rows))
 
     # ── Testleri çalıştır ───────────────────────────────────────────────
     if args.no_run:
-        print("Testler çalıştırılmıyor (--no-run / wizard seçimi).")
+        _logger.info("Testler çalıştırılmıyor (--no-run / wizard seçimi).")
         executed_rows = all_rows
     else:
         executed_rows = run_testcases(
@@ -560,8 +556,7 @@ def main() -> None:
         save_generator_metrics_csv(metrics, args.output_dir)
         print_summary_table(executed_rows)
 
-    print()
-    print(f"Tamamlandı. Çıktılar: {args.output_dir}/")
+    _logger.info("\nTamamlandı. Çıktılar: %s/", args.output_dir)
 
 
 if __name__ == "__main__":
