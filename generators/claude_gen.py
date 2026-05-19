@@ -1,10 +1,10 @@
 """Anthropic Claude tabanlı test senaryosu üreticisi."""
 
-import os
 from typing import Dict, List
 
 from models import ApiOperation
 from generators.base import BaseGenerator
+from security.secret_loader import get_api_key
 
 try:
     import anthropic  # type: ignore
@@ -22,9 +22,7 @@ class ClaudeGenerator(BaseGenerator):
     def _get_client(self):
         if anthropic is None:
             raise RuntimeError("'anthropic' paketi yüklü değil. pip install anthropic")
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        if not api_key:
-            raise RuntimeError("ANTHROPIC_API_KEY ortam değişkeni tanımlı değil.")
+        api_key = get_api_key("claude")
         if self._client is None:
             self._client = anthropic.Anthropic(api_key=api_key)
         return self._client

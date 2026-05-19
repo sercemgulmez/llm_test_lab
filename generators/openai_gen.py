@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import os
 from typing import Dict, List
 
 from models import ApiOperation
 from generators.base import BaseGenerator
+from security.secret_loader import get_api_key_from_env
 
 try:
     from openai import OpenAI  # type: ignore
@@ -28,9 +28,7 @@ class OpenAIGenerator(BaseGenerator):
     def _get_client(self):
         if OpenAI is None:
             raise RuntimeError("'openai' paketi yüklü değil. pip install openai")
-        api_key = os.getenv(self._api_key_env)
-        if not api_key:
-            raise RuntimeError(f"{self._api_key_env} ortam değişkeni tanımlı değil.")
+        api_key = get_api_key_from_env(self._api_key_env)
         if self._client is None:
             kwargs: dict = {"api_key": api_key}
             if self._base_url:

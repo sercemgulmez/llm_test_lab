@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from config import MAX_PARALLEL_WORKERS, RETRY_BACKOFF_SECONDS, RETRY_MAX_ATTEMPTS
 from models import ApiOperation, TestCase
+from security.redaction import redact_secrets
 
 
 _NON_RETRYABLE_ERROR_MARKERS = (
@@ -707,19 +708,20 @@ class BaseGenerator(ABC):
             try:
                 return self._generate_for_operation(op, variant_name, variant_desc, num_cases)
             except Exception as exc:
+                safe_exc = redact_secrets(str(exc))
                 if _is_non_retryable_generation_error(exc):
                     self._aborted = True
-                    print(f"  [HATA] {op.op_id} kalici provider veya kredi hatasi - generator iptal edildi: {exc}")
+                    print(f"  [HATA] {op.op_id} kalici provider veya kredi hatasi - generator iptal edildi: {safe_exc}")
                     break
                 if attempt < RETRY_MAX_ATTEMPTS:
                     wait = RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1))
                     print(
-                        f"  [RETRY {attempt}/{RETRY_MAX_ATTEMPTS}] {op.op_id} hata: {exc} "
+                        f"  [RETRY {attempt}/{RETRY_MAX_ATTEMPTS}] {op.op_id} hata: {safe_exc} "
                         f"- {wait:.1f}s bekleyip tekrar deneniyor..."
                     )
                     time.sleep(wait)
                 else:
-                    print(f"  [HATA] {op.op_id} tum denemeler basarisiz: {exc}")
+                    print(f"  [HATA] {op.op_id} tum denemeler basarisiz: {safe_exc}")
         return []
 
     @abstractmethod

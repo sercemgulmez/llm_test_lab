@@ -1,10 +1,10 @@
 """Google Gemini tabanlı test senaryosu üreticisi."""
 
-import os
 from typing import Dict, List
 
 from models import ApiOperation
 from generators.base import BaseGenerator
+from security.secret_loader import get_api_key
 
 try:
     from google import genai  # type: ignore
@@ -22,9 +22,7 @@ class GeminiGenerator(BaseGenerator):
     def _get_client(self):
         if genai is None:
             raise RuntimeError("'google-genai' paketi yüklü değil. pip install google-genai")
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            raise RuntimeError("GEMINI_API_KEY ortam değişkeni tanımlı değil.")
+        api_key = get_api_key("gemini")
         if self._client is None:
             self._client = genai.Client(api_key=api_key)
         return self._client

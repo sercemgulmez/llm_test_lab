@@ -145,26 +145,37 @@ Bu görünüm, toplamda iyi gözüken bir modelin hangi endpoint türlerinde zay
 
 ```text
 .
-|-- app.py                     # Flask Web UI
-|-- main.py                    # CLI / wizard
-|-- config.py                  # Merkezi ayarlar
-|-- runner.py                  # Test case execution
-|-- models.py                  # Veri modelleri
+|-- app.py                          # Flask Web UI
+|-- main.py                         # CLI / wizard
+|-- config.py                       # Merkezi ayarlar
+|-- runner.py                       # Test case execution
+|-- models.py                       # Veri modelleri
 |-- generators/
-|   |-- traditional.py         # Baseline generator
-|   |-- openai_gen.py          # OpenAI adapter
-|   |-- gemini_gen.py          # Gemini adapter
-|   |-- claude_gen.py          # Claude adapter
-|   `-- base.py                # Ortak LLM yardımcıları
+|   |-- traditional.py              # Baseline generator
+|   |-- openai_gen.py               # OpenAI adapter
+|   |-- gemini_gen.py               # Gemini adapter
+|   |-- claude_gen.py               # Claude adapter
+|   |-- groq_gen.py                 # Groq adapter
+|   `-- base.py                     # Ortak LLM yardımcıları
 |-- parsers/
-|   |-- openapi.py             # OpenAPI parser
-|   `-- curl_parser.py         # curl parser
+|   |-- openapi.py                  # OpenAPI parser
+|   `-- curl_parser.py              # curl parser
 |-- reporters/
-|   `-- csv_reporter.py        # CSV ve analitik özetler
+|   `-- csv_reporter.py             # CSV ve analitik özetler
+|-- security/
+|   |-- redaction.py                # Secret redaction utility
+|   `-- secret_loader.py            # Safe API key loader
+|-- scripts/
+|   `-- scan_secrets.py             # Local secret scanner (exit 1 on hit)
+|-- docs/
+|   `-- security.md                 # Security policy & key rotation guide
 |-- templates/
-|   `-- index.html             # Web arayüzü
-|-- tests/                     # Unit ve integration testleri
-`-- .github/workflows/ci.yml   # GitHub Actions CI
+|   `-- index.html                  # Web arayüzü
+|-- tests/                          # Unit ve integration testleri
+|-- .env.example                    # Placeholder env file (committed)
+`-- .github/workflows/
+    |-- ci.yml                      # Test suite CI
+    `-- security-check.yml          # Secret scan CI
 ```
 
 ## Gereksinimler
@@ -189,6 +200,51 @@ Kullanılan değişkenler:
 Not:
 
 - Eğer bir API anahtarı geçmişte commit edildiyse, sadece `.gitignore` yetmez; anahtar mutlaka rotate edilmelidir.
+
+## Security & Secret Management
+
+This is a public academic/research prototype. The following rules apply to all contributors.
+
+**Never commit real API keys.** `.env.example` contains placeholder values only. Real keys must be stored locally in `.env`, which is git-ignored and must never be committed.
+
+### Local Setup
+
+```bash
+cp .env.example .env
+# Open .env and fill in your own keys
+```
+
+### If a real key was accidentally committed
+
+Treat it as **compromised immediately** — being in git history is the same as being public. Steps:
+
+1. Revoke/rotate the key at the provider dashboard:
+   - OpenAI: <https://platform.openai.com/api-keys>
+   - Anthropic: <https://console.anthropic.com/settings/keys>
+   - Groq: <https://console.groq.com/keys>
+   - Google AI / Gemini: <https://aistudio.google.com/app/apikey>
+2. Purge the key from git history with `git filter-repo` or BFG Repo Cleaner.
+3. Force-push the cleaned history and notify collaborators.
+
+### Secret scanning
+
+A local scanner is included. Run it before every push:
+
+```bash
+python scripts/scan_secrets.py
+```
+
+Exits with code `0` if clean, `1` if potential secrets are detected. File paths and pattern names are reported — actual values are never printed.
+
+GitHub Actions runs this scanner automatically on every push and pull request via [.github/workflows/security-check.yml](.github/workflows/security-check.yml).
+
+### How API keys are handled
+
+- Keys are loaded from environment variables at runtime via `security/secret_loader.py`.
+- Error messages include only the variable **name**, never the value.
+- Exception messages and HTTP error responses are passed through `security/redaction.py` before being logged or returned, masking any accidentally embedded key values.
+
+See [docs/security.md](docs/security.md) for the full policy, rotation checklist, and incident response steps.
 
 ## Kurulum: Komut Komut
 

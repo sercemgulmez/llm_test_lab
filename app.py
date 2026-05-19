@@ -31,6 +31,7 @@ if hasattr(sys.stderr, "reconfigure"):
 from flask import Flask, Response, jsonify, render_template, request, send_file
 from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
+from security.redaction import redact_secrets
 
 load_dotenv()
 
@@ -584,7 +585,7 @@ def _job_thread(job_id: str, data: dict):
             _jobs[job_id]["generation_quality"] = result["generation_quality"]
             _jobs[job_id]["output_dir"] = result["output_dir"]
     except Exception as e:
-        message = str(e)
+        message = redact_secrets(str(e))
         q.put({"type": "error", "text": message})
         with _jobs_lock:
             if _jobs[job_id].get("cancel_requested"):
@@ -664,7 +665,7 @@ def run_job():
     try:
         safe_output = _resolve_safe_output_dir(data.get("output_dir") or config.OUTPUT_DIR)
     except ValueError as exc:
-        return _json_response(str(exc), 400)
+        return _json_response(redact_secrets(str(exc)), 400)
 
     job_id = secrets.token_hex(config.JOB_ID_BYTES)
     access_token = secrets.token_urlsafe(config.JOB_TOKEN_BYTES)
