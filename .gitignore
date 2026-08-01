@@ -12,6 +12,7 @@ COMPARISON_GUIDE.md
 venv/
 .venv/
 env/
+.venv.bak_broken/
 
 # Python cache
 __pycache__/
