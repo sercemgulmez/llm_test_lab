@@ -41,3 +41,36 @@ runtime_uploads_*/
 # OS
 .DS_Store
 Thumbs.db
+
+# Güvenlik / hassas dosyalar (anahtar, sertifika, kimlik bilgisi, log)
+*.pem
+*.key
+*.crt
+*.cer
+*.der
+*.p12
+*.pfx
+id_rsa
+id_rsa.pub
+id_ed25519*
+.ssh/
+credentials.json
+service-account*.json
+*-credentials.json
+.aws/
+.gcloud/
+.netrc
+*.sqlite
+*.sqlite3
+*.db
+*.log
+config.local.*
+*.local.json
+*.local.yml
+secrets.*
+*.bak
+*.orig
+*.swp
+
+# Lint cache
+.ruff_cache/
