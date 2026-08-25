@@ -3,7 +3,7 @@ LLM Test Lab — Web UI (Flask)
 
 Başlatmak için:
     python app.py
-Ardından tarayıcıda aç: http://localhost:5000
+Ardından tarayıcıda aç: http://localhost:5050
 """
 
 from __future__ import annotations
@@ -237,6 +237,7 @@ def _build_run_metadata(
             "gemini_models": config.GEMINI_MODELS,
             "claude_models": config.CLAUDE_MODELS,
             "groq_models": config.GROQ_MODELS,
+            "nvidia_models": config.NVIDIA_MODELS,
             "request_timeout": config.REQUEST_TIMEOUT,
             "retry_max_attempts": config.RETRY_MAX_ATTEMPTS,
             "retry_backoff_seconds": config.RETRY_BACKOFF_SECONDS,
@@ -297,6 +298,7 @@ def _selected_generator_keys(selected_keys: list[str]) -> list[str]:
     keys.extend(f"gemini:{model}" for model in config.GEMINI_MODELS)
     keys.extend(f"claude:{model}" for model in config.CLAUDE_MODELS)
     keys.extend(f"groq:{model}" for model in config.GROQ_MODELS)
+    keys.extend(f"nvidia:{model}" for model in config.NVIDIA_MODELS)
     return keys
 
 
@@ -644,6 +646,7 @@ def index():
         gemini_models=config.GEMINI_MODELS,
         claude_models=config.CLAUDE_MODELS,
         groq_models=config.GROQ_MODELS,
+        nvidia_models=config.NVIDIA_MODELS,
         default_output=config.OUTPUT_DIR,
         default_num_cases=config.NUM_CASES_PER_OPERATION,
         max_cases=config.MAX_CASES_PER_OPERATION,
@@ -878,6 +881,6 @@ def download_report(job_id: str):
 if __name__ == "__main__":
     print("=" * 50)
     print("  LLM Test Lab Web UI")
-    print("  http://localhost:5000")
+    print("  http://localhost:5050")
     print("=" * 50)
-    app.run(debug=False, port=5000, threaded=True)
+    app.run(debug=False, port=5050, threaded=True)

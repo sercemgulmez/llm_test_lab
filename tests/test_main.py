@@ -31,3 +31,13 @@ def test_build_llm_generators_includes_selected_groq_model():
     assert len(generators) == len(config.PROMPT_VARIANTS)
     assert all(generator.__class__.__name__ == "GroqGenerator" for generator, _, _ in generators)
     assert all(generator.model == selected_model for generator, _, _ in generators)
+
+
+def test_build_llm_generators_includes_selected_nvidia_model():
+    selected_model = config.NVIDIA_MODELS[0]
+
+    generators = main._build_llm_generators([f"nvidia:{selected_model}"])
+
+    assert len(generators) == len(config.PROMPT_VARIANTS)
+    assert all(generator.__class__.__name__ == "NvidiaGenerator" for generator, _, _ in generators)
+    assert all(generator.model == selected_model for generator, _, _ in generators)
