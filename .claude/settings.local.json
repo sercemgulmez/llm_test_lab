@@ -3,7 +3,9 @@
     "allow": [
       "Bash(venv/Scripts/python -c \"import main; print\\(''Syntax OK''\\)\")",
       "Bash(venv/Scripts/python.exe -c \"import app; print\\(''app.py import OK''\\)\")",
-      "Bash(python3 -m pip show ruff)"
+      "Bash(python3 -m pip show ruff)",
+      "Bash(grep -E \"^\\\\.env$\")",
+      "Bash(echo \"exit=$?\")"
     ]
   }
 }
