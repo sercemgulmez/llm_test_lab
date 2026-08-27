@@ -7,7 +7,9 @@
       "Bash(grep -E \"^\\\\.env$\")",
       "Bash(echo \"exit=$?\")",
       "Bash(python -c \"import config, main, app, generators\")",
-      "Bash(ruff check *)"
+      "Bash(ruff check *)",
+      "Read(//Users/suleymansercemgulmez/.codex/**)",
+      "Read(//Users/suleymansercemgulmez/**)"
     ]
   }
 }
