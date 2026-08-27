@@ -23,12 +23,11 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("openai-key", re.compile(r"sk-[A-Za-z0-9]{48}")),
     ("groq-key", re.compile(r"gsk_[A-Za-z0-9]{52}")),
     ("gemini-key", re.compile(r"AIza[A-Za-z0-9_\-]{35}")),
-    ("nvidia-key", re.compile(r"nvapi-[A-Za-z0-9_\-]{40,}")),
     ("bearer-token", re.compile(r"Bearer\s+[A-Za-z0-9\-_\.]{20,}", re.IGNORECASE)),
     (
         "env-assignment",
         re.compile(
-            r"(OPENAI_API_KEY|ANTHROPIC_API_KEY|GROQ_API_KEY|GEMINI_API_KEY|NVIDIA_API_KEY)"
+            r"(OPENAI_API_KEY|ANTHROPIC_API_KEY|GROQ_API_KEY|GEMINI_API_KEY)"
             r"\s*=\s*(?!your_|<|#|\s*$)\S+",
             re.IGNORECASE,
         ),

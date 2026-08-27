@@ -23,12 +23,6 @@ GROQ_MODELS = [
     "llama-3.1-8b-instant",
 ]
 
-# NVIDIA NIM modelleri (build.nvidia.com — ücretsiz API tier)
-NVIDIA_MODELS = [
-    "meta/llama-3.3-70b-instruct",
-    "meta/llama-3.1-8b-instruct",
-]
-
 # Anthropic Claude modelleri
 CLAUDE_MODELS = [
     "claude-sonnet-4-6",
@@ -81,13 +75,11 @@ MAX_PARALLEL_WORKERS: int = 5
 
 # Provider başına max_tokens üst sınırı
 # Groq ücretsiz tier 8192 ile sınırlı; OpenAI 16384'e kadar izin verir.
-# NVIDIA NIM ücretsiz tier 4096 ile sınırlı.
 MAX_TOKENS_BY_PROVIDER: dict[str, int] = {
     "openai": 16384,
     "gemini":  8192,
     "claude":  8192,
     "groq":    8192,
-    "nvidia":  4096,
 }
 
 

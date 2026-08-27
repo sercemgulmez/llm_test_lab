@@ -5,7 +5,6 @@ from generators.openai_gen import OpenAIGenerator
 from generators.gemini_gen import GeminiGenerator
 from generators.claude_gen import ClaudeGenerator
 from generators.groq_gen import GroqGenerator
-from generators.nvidia_gen import NvidiaGenerator
 import config
 
 __all__ = [
@@ -14,7 +13,6 @@ __all__ = [
     "GeminiGenerator",
     "ClaudeGenerator",
     "GroqGenerator",
-    "NvidiaGenerator",
     "GENERATOR_REGISTRY",
 ]
 
@@ -31,5 +29,3 @@ for _m in config.CLAUDE_MODELS:
     GENERATOR_REGISTRY[f"claude:{_m}"] = (ClaudeGenerator, _m, "Claude")
 for _m in config.GROQ_MODELS:
     GENERATOR_REGISTRY[f"groq:{_m}"] = (GroqGenerator, _m, "Groq")
-for _m in config.NVIDIA_MODELS:
-    GENERATOR_REGISTRY[f"nvidia:{_m}"] = (NvidiaGenerator, _m, "Nvidia")

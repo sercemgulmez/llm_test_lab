@@ -172,7 +172,6 @@
     .tag-gemini { background: #4285f422; color: #4285f4; }
     .tag-claude { background: #d97b4222; color: var(--orange); }
     .tag-groq   { background: #f5503622; color: #f55036; }
-    .tag-nvidia { background: #76b90022; color: #76b900; }
 
     /* ── Slider ──────────────────────────────────────────── */
     input[type="range"] {
@@ -559,13 +558,6 @@
           <input type="checkbox" value="groq:{{ m }}" checked />
           <span class="gen-name">{{ m }}</span>
           <span class="tag tag-groq">Groq</span>
-        </label>
-        {% endfor %}
-        {% for m in nvidia_models %}
-        <label class="gen-item">
-          <input type="checkbox" value="nvidia:{{ m }}" checked />
-          <span class="gen-name">{{ m }}</span>
-          <span class="tag tag-nvidia">NVIDIA</span>
         </label>
         {% endfor %}
       </div>
@@ -1213,7 +1205,6 @@
     if (n.includes("gemini"))      return "#4285f4";
     if (n.includes("claude"))      return "#d97b42";
     if (n.includes("groq"))        return "#f55036";
-    if (n.includes("nvidia"))      return "#76b900";
     return ["#58a6ff", "#bc8cff", "#f85149", "#d29922"][(name || "").charCodeAt(0) % 4];
   }
 

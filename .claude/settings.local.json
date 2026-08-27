@@ -5,7 +5,9 @@
       "Bash(venv/Scripts/python.exe -c \"import app; print\\(''app.py import OK''\\)\")",
       "Bash(python3 -m pip show ruff)",
       "Bash(grep -E \"^\\\\.env$\")",
-      "Bash(echo \"exit=$?\")"
+      "Bash(echo \"exit=$?\")",
+      "Bash(python -c \"import config, main, app, generators\")",
+      "Bash(ruff check *)"
     ]
   }
 }

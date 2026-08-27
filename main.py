@@ -223,9 +223,6 @@ def interactive_wizard() -> argparse.Namespace:
     for m in config.GROQ_MODELS:
         gen_options.append(f"Groq              {m}")
         gen_keys.append(f"groq:{m}")
-    for m in config.NVIDIA_MODELS:
-        gen_options.append(f"NVIDIA NIM        {m}")
-        gen_keys.append(f"nvidia:{m}")
 
     selected_indices = _wms("Generator seçin", gen_options)
     selected_keys = [gen_keys[i] for i in selected_indices]
@@ -405,7 +402,6 @@ def _save_cli_run_info(args: argparse.Namespace, operations: list, output_dir: s
             "gemini_models": config.GEMINI_MODELS,
             "claude_models": config.CLAUDE_MODELS,
             "groq_models": config.GROQ_MODELS,
-            "nvidia_models": config.NVIDIA_MODELS,
             "request_timeout": config.REQUEST_TIMEOUT,
             "retry_max_attempts": config.RETRY_MAX_ATTEMPTS,
             "retry_backoff_seconds": config.RETRY_BACKOFF_SECONDS,
