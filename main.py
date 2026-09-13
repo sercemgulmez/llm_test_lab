@@ -328,6 +328,13 @@ def parse_args() -> argparse.Namespace:
         default=config.NUM_CASES_PER_OPERATION,
         help="Her operasyon için üretilecek testcase sayısı.",
     )
+    parser.add_argument(
+        "--max-tests",
+        metavar="N",
+        type=int,
+        default=None,
+        help="Üretilen toplam testcase sayısını sınırlar (opsiyonel).",
+    )
     ns = parser.parse_args()
     ns.selected_generators = None  # Tümünü kullan
     ns.num_cases = config.normalize_num_cases(ns.num_cases)
@@ -532,6 +539,11 @@ def main() -> None:
             _logger.info("  [%s] %d senaryo üretildi.", gen_label, len(rows))
         except RuntimeError as e:
             _logger.warning("  [%s] ATILDI — %s", gen_label, e)
+
+    max_tests = getattr(args, "max_tests", None)
+    if max_tests and len(all_rows) > max_tests:
+        all_rows = all_rows[:max_tests]
+        _logger.info("  Test sayısı --max-tests ile %d'e sınırlandı.", max_tests)
 
     _logger.info("\nToplam %d test senaryosu üretildi.", len(all_rows))
 
