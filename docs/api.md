@@ -32,14 +32,14 @@ Job endpoints (all except `/health`, `/upload`, `/run`) require the `X-Job-Token
   "auth_token": "Bearer ...",
   "headers": ["X-Custom: value"],
   "cookie": "name=value; other=value",
-  "selected_generators": ["traditional", "openai:gpt-4o-mini", "claude:claude-sonnet-4-6"],
+  "selected_generators": ["traditional", "openai:gpt-4o-mini", "claude:claude-sonnet-4-5"],
   "num_cases": 10,
   "no_run": false,
   "output_dir": "outputs"
 }
 ```
 
-`selected_generators` keys follow the pattern `provider:model` (e.g. `openai:gpt-4o-mini`, `gemini:gemini-2.0-flash`, `claude:claude-sonnet-4-6`, `groq:llama-3.3-70b-versatile`). Use `traditional` for the template baseline. Omit the field (or send an empty list) to include all generators.
+`selected_generators` keys follow the pattern `provider:model` (e.g. `openai:gpt-4o-mini`, `gemini:gemini-3.5-flash-lite`, `claude:claude-sonnet-4-5`, `groq:openai/gpt-oss-120b`). Use `traditional` for the template baseline. Omit the field (or send an empty list) to include all generators.
 
 ## Job Lifecycle
 

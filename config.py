@@ -6,27 +6,26 @@ from pathlib import Path
 
 # OpenAI (GPT) modelleri
 OPENAI_MODELS = [
-    "gpt-4.1-mini",
     "gpt-4.1",
     "gpt-4o-mini",
 ]
 
 # Google Gemini modelleri
 GEMINI_MODELS = [
-    "gemini-2.0-flash",
     "gemini-2.5-flash",
+    "gemini-3.5-flash-lite",
 ]
 
-# Groq modelleri (ücretsiz tier — 30 RPM)
+# Groq modelleri
 GROQ_MODELS = [
-    "llama-3.3-70b-versatile",
-    "llama-3.1-8b-instant",
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
 ]
 
 # Anthropic Claude modelleri
 CLAUDE_MODELS = [
-    "claude-sonnet-4-6",
-    "claude-haiku-4-5-20251001",
+    "claude-sonnet-4-5",
+    "claude-haiku-4-5",
 ]
 
 # Prompt stratejileri (farklı test üretim tarzları)

@@ -339,7 +339,7 @@ def parse_args() -> argparse.Namespace:
 def _build_llm_generators(selected_keys: list = None) -> list:
     """
     LLM generator tuple listesi döner: (instance, variant_name, variant_desc)
-    selected_keys: ["openai:gpt-4.1-mini", "gemini:...", "claude:...", "groq:..."]
+    selected_keys: ["openai:gpt-4.1", "gemini:...", "claude:...", "groq:..."]
                    None ise tümü dahil edilir.
     """
     generators = []
