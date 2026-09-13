@@ -10,12 +10,14 @@ Kullanım:
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 import json
 import logging
 import os
 from pathlib import Path
 import sys
+import time
 
 from dotenv import load_dotenv
 
@@ -517,6 +519,8 @@ def main() -> None:
     num_cases = getattr(args, "num_cases", config.NUM_CASES_PER_OPERATION)
     _save_cli_run_info(args, operations, args.output_dir, selected_keys)
 
+    generation_started_at = time.perf_counter()
+
     # Geleneksel şablon
     if selected_keys is None or "traditional" in selected_keys:
         trad_gen = TraditionalGenerator()
@@ -524,21 +528,33 @@ def main() -> None:
         all_rows.extend(trad_rows)
         _logger.info("  [Geleneksel] %d senaryo üretildi.", len(trad_rows))
 
-    # LLM tabanlı generator'lar
-    for gen_instance, v_name, v_desc in _build_llm_generators(selected_keys):
-        gen_label = f"{type(gen_instance).__name__} ({v_name})"
-        _logger.info("  [%s] üretiliyor...", gen_label)
-        try:
-            rows = gen_instance.generate(
+    # LLM tabanlı generator'lar — dış döngü paralelliği (generator başına bir thread)
+    llm_generators = _build_llm_generators(selected_keys)
+    with ThreadPoolExecutor(max_workers=config.MAX_PARALLEL_GENERATORS) as executor:
+        future_to_label = {}
+        for gen_instance, v_name, v_desc in llm_generators:
+            gen_label = f"{type(gen_instance).__name__} ({v_name})"
+            _logger.info("  [%s] üretiliyor...", gen_label)
+            future = executor.submit(
+                gen_instance.generate,
                 operations,
                 variant_name=v_name,
                 variant_desc=v_desc,
                 num_cases=num_cases,
             )
-            all_rows.extend(rows)
-            _logger.info("  [%s] %d senaryo üretildi.", gen_label, len(rows))
-        except RuntimeError as e:
-            _logger.warning("  [%s] ATILDI — %s", gen_label, e)
+            future_to_label[future] = gen_label
+
+        for future in as_completed(future_to_label):
+            gen_label = future_to_label[future]
+            try:
+                rows = future.result()
+                all_rows.extend(rows)
+                _logger.info("  [%s] %d senaryo üretildi.", gen_label, len(rows))
+            except RuntimeError as e:
+                _logger.warning("  [%s] ATILDI — %s", gen_label, e)
+
+    generation_elapsed = time.perf_counter() - generation_started_at
+    _logger.info("  Üretim süresi: %.1f saniye (%.1f dakika).", generation_elapsed, generation_elapsed / 60)
 
     max_tests = getattr(args, "max_tests", None)
     if max_tests and len(all_rows) > max_tests:

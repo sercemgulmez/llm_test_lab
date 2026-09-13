@@ -70,7 +70,12 @@ RETRY_MAX_ATTEMPTS: int = 3
 RETRY_BACKOFF_SECONDS: float = 8.0
 
 # LLM operasyonları için paralel thread sayısı (I/O-bound API çağrıları)
-MAX_PARALLEL_WORKERS: int = 5
+MAX_PARALLEL_WORKERS: int = 9
+
+# Aynı anda çalışacak LLM generator sayısı (dış döngü paralelliği).
+# MAX_PARALLEL_WORKERS ile çarpılarak toplam thread sayısını belirler —
+# rate limit'lere takılmamak için mütevazı tutulur.
+MAX_PARALLEL_GENERATORS: int = 3
 
 # Provider başına max_tokens üst sınırı
 # Groq ücretsiz tier 8192 ile sınırlı; OpenAI 16384'e kadar izin verir.
