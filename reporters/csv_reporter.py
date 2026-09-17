@@ -46,11 +46,18 @@ def save_operations_csv(operations: List[ApiOperation], output_dir: str) -> str:
 # ── Test sonuçları ─────────────────────────────────────────────────────────────
 
 RESULT_FIELDNAMES = [
-    "generator", "operation_id", "http_method", "path",
+    "generator", "prompt_variant", "operation_id", "http_method", "path",
     "tc_id", "title", "test_type", "priority",
     "request_body", "expected_status", "expected_result",
     "url", "actual_status", "actual_body", "pass", "tokens_used",
 ]
+
+
+def _strip_nul(value):
+    """csv.reader NUL (\\x00) iceren satirlari okuyamadigi icin yazmadan once temizler."""
+    if isinstance(value, str) and "\x00" in value:
+        return value.replace("\x00", "")
+    return value
 
 
 def save_results_csv(rows: List[Dict], output_dir: str) -> str:
@@ -63,7 +70,7 @@ def save_results_csv(rows: List[Dict], output_dir: str) -> str:
         w = csv.DictWriter(f, fieldnames=RESULT_FIELDNAMES, extrasaction="ignore", restval="")
         w.writeheader()
         for r in rows:
-            w.writerow(r)
+            w.writerow({k: _strip_nul(v) for k, v in r.items()})
     print(f"Test sonuçları kaydedildi: {path}")
     return path
 

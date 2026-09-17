@@ -359,7 +359,7 @@ def _build_llm_generators(selected_keys: list = None) -> list:
             generators.append((cls(), "traditional", "Template baseline"))  # No model arg
         else:
             for v_name, v_desc in config.PROMPT_VARIANTS.items():
-                generators.append((cls(model), v_name, v_desc))
+                generators.append((cls(model), v_name, v_desc["focus"]))
     return generators
 
 

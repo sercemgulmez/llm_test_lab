@@ -1,0 +1,9 @@
+curl -X GET "https://httpbin.org/get?query=demo" -H "Accept: application/json"
+
+curl -X POST "https://httpbin.org/post" -H "Content-Type: application/json" -d "{\"name\":\"sercem\",\"role\":\"tester\"}"
+
+curl -X PUT "https://httpbin.org/put" -H "Content-Type: application/json" -d "{\"name\":\"sercem-updated\"}"
+
+curl -X PATCH "https://httpbin.org/patch" -H "Content-Type: application/json" -d "{\"status\":\"active\"}"
+
+curl -X DELETE "https://httpbin.org/delete" -H "Accept: application/json"

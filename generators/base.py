@@ -670,6 +670,8 @@ class BaseGenerator(ABC):
             accepted_rows.extend(fallback_rows)
 
         final_rows = accepted_rows[:num_cases]
+        for row in final_rows:
+            row["prompt_variant"] = variant_name
         if total_tokens:
             _apply_token_tracking(final_rows, total_tokens)
 

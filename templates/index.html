@@ -470,17 +470,17 @@
       <div class="card-title">📂 Operasyon Kaynağı</div>
       <div class="radio-group">
         <label class="radio-opt">
-          <input type="radio" name="source" value="curl" id="src-curl" />
+          <input type="radio" name="source" value="curl" id="src-curl" checked />
           curl Dosyasından Oku
         </label>
         <label class="radio-opt">
-          <input type="radio" name="source" value="openapi" id="src-openapi" checked />
+          <input type="radio" name="source" value="openapi" id="src-openapi" />
           OpenAPI / Swagger URL
         </label>
       </div>
 
       <!-- curl panel -->
-      <div class="source-panel" id="panel-curl">
+      <div class="source-panel active" id="panel-curl">
         <div class="drop-zone" id="drop-zone" onclick="document.getElementById('curl-input').click()">
           <input type="file" id="curl-input" accept=".txt,.curl" style="display:none" />
           <div>📄 Dosya seçin veya buraya sürükleyin</div>
@@ -489,19 +489,19 @@
         </div>
         <div class="field">
           <label>Base URL <em style="color:var(--muted)">(opsiyonel — curl'den alınır)</em></label>
-          <input type="url" id="curl-base-url" placeholder="https://api.example.com/v1" />
+          <input type="url" id="curl-base-url" placeholder="https://httpbin.org" />
         </div>
       </div>
 
       <!-- openapi panel -->
-      <div class="source-panel active" id="panel-openapi">
+      <div class="source-panel" id="panel-openapi">
         <div class="field">
           <label>OpenAPI / Swagger URL <span style="color:var(--red)">*</span></label>
-          <input type="url" id="openapi-url" value="https://petstore.swagger.io/v2/swagger.json" placeholder="https://petstore.swagger.io/v2/swagger.json" />
+          <input type="url" id="openapi-url" value="https://httpbin.org/spec.json" placeholder="https://httpbin.org/spec.json" />
         </div>
         <div class="field">
           <label>Base URL <span style="color:var(--red)">*</span></label>
-          <input type="url" id="openapi-base-url" value="https://petstore.swagger.io/v2" placeholder="https://petstore.swagger.io/v2" />
+          <input type="url" id="openapi-base-url" value="https://httpbin.org" placeholder="https://httpbin.org" />
         </div>
       </div>
     </div>
@@ -676,6 +676,49 @@
     return currentJobToken ? "?token=" + encodeURIComponent(currentJobToken) : "";
   }
 
+  // ── Son işi kalıcı hale getir (sayfa yenilense bile Sonuçlar sekmesi kaybolmasın) ──
+  const LAST_JOB_KEY = "llmTestLab.lastJob";
+
+  function saveLastJob(jobId, jobToken) {
+    try {
+      localStorage.setItem(LAST_JOB_KEY, JSON.stringify({ jobId, jobToken, ts: Date.now() }));
+    } catch (e) { /* localStorage kullanılamıyorsa sessizce geç */ }
+  }
+
+  function clearLastJob() {
+    try { localStorage.removeItem(LAST_JOB_KEY); } catch (e) { /* yoksay */ }
+  }
+
+  function restoreLastJob() {
+    let saved = null;
+    try {
+      saved = JSON.parse(localStorage.getItem(LAST_JOB_KEY) || "null");
+    } catch (e) { saved = null; }
+    if (!saved || !saved.jobId || !saved.jobToken) return;
+
+    currentJobId = saved.jobId;
+    currentJobToken = saved.jobToken;
+
+    fetch("/result_data/" + saved.jobId + authQuery())
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(tableData => {
+        if (!tableData.rows || tableData.rows.length === 0) {
+          currentJobId = null;
+          currentJobToken = null;
+          return;
+        }
+        addLog("Önceki iş sonuçları geri yüklendi — " + saved.jobId, "info");
+        loadResults(saved.jobId);
+        switchTab("results", document.querySelectorAll(".tab-btn")[1]);
+      })
+      .catch(() => {
+        // Job artık yok (sunucu yeniden başlamış olabilir) — sessizce temizle
+        clearLastJob();
+        currentJobId = null;
+        currentJobToken = null;
+      });
+  }
+
   // ── Tab switching ─────────────────────────────────────────────────────
   function switchTab(name, el) {
     document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
@@ -780,6 +823,7 @@
 
       currentJobId = data.job_id;
       currentJobToken = data.job_token;
+      saveLastJob(currentJobId, currentJobToken);
       addLog("İş başlatıldı — " + data.job_id, "info");
       setProgress(15, "Loglar bekleniyor...");
       cancelBtn.disabled = false;
@@ -1359,6 +1403,9 @@
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;");
   }
+
+  // Sayfa açılışında en son tamamlanan işi otomatik geri yükle
+  restoreLastJob();
 </script>
 </body>
 </html>

@@ -114,6 +114,7 @@ class TraditionalGenerator(BaseGenerator):
                 priority=case["priority"],
             )
             row = tc.to_dict()
+            row["prompt_variant"] = "traditional"
             row["generation_metadata"] = {
                 "source": "traditional",
                 "repaired": False,

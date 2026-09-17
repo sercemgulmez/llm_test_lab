@@ -15,6 +15,23 @@ _logger = logging.getLogger(__name__)
 
 _PATH_PARAM_RE = re.compile(r"\{([^{}]+)\}")
 
+_MAX_ACTUAL_BODY_CHARS = 4000
+
+
+def _sanitize_response_text(text: str) -> str:
+    """CSV/JSON'u bozan NUL byte'larini temizler ve binary yanitlari kisaltir.
+
+    httpbin gibi /bytes, /stream-bytes, /range endpoint'leri rastgele binary
+    veri dondurebilir; bu veri csv.reader icin gecersiz olan NUL (\\x00)
+    karakterleri icerebilir ve tum CSV dosyasinin okunmasini engeller.
+    """
+    if not text:
+        return text
+    cleaned = text.replace("\x00", "")
+    if len(cleaned) > _MAX_ACTUAL_BODY_CHARS:
+        cleaned = cleaned[:_MAX_ACTUAL_BODY_CHARS] + "...(truncated)"
+    return cleaned
+
 
 def _join_url(base_url: str, path: str) -> str:
     """Join a base URL and request path without duplicating endpoint paths."""
@@ -324,7 +341,7 @@ def run_testcases(
                     request_kwargs["json"] = json_body
                 response = session.request(method, full_url, **request_kwargs)
                 status = response.status_code
-                actual_body = getattr(response, "text", "") or ""
+                actual_body = _sanitize_response_text(getattr(response, "text", "") or "")
                 assertion_results = _evaluate_assertions(expected.get("assertions", []), response, actual_body)
                 schema_check_result = _evaluate_schema_check(expected, actual_body)
                 if schema_check_result is not None:

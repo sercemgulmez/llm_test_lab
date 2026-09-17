@@ -1,15 +1,14 @@
-"""Merkezi yapılandırma sabitleri - Tez Uyumlu (10 Generator + 2 Prompt)"""
+"""Merkezi yapılandırma sabitleri - Tez Uyumlu (9 Generator + 2 Prompt)"""
 
 from __future__ import annotations
 from pathlib import Path
 
-# ============= 10 GENERATOR (9 LLM + 1 Traditional) =============
+# ============= 9 GENERATOR (8 LLM + 1 Traditional) =============
 
-# OpenAI (3 models)
+# OpenAI (2 models)
 OPENAI_MODELS = [
     "gpt-4.1",
     "gpt-4o-mini",
-    "gpt-4-turbo",  # ← NEW
 ]
 
 # Google Gemini (2 models)
@@ -38,8 +37,8 @@ TRADITIONAL_MODELS = [
 # Validation
 TOTAL_LLM_MODELS = len(OPENAI_MODELS) + len(GEMINI_MODELS) + len(GROQ_MODELS) + len(CLAUDE_MODELS)
 TOTAL_GENERATORS = TOTAL_LLM_MODELS + len(TRADITIONAL_MODELS)
-assert TOTAL_GENERATORS == 10, f"Expected 10 generators, got {TOTAL_GENERATORS}"
-assert TOTAL_LLM_MODELS == 9, f"Expected 9 LLM, got {TOTAL_LLM_MODELS}"
+assert TOTAL_GENERATORS == 9, f"Expected 9 generators, got {TOTAL_GENERATORS}"
+assert TOTAL_LLM_MODELS == 8, f"Expected 8 LLM, got {TOTAL_LLM_MODELS}"
 
 # ============= 2 PROMPT STRATEGIES =============
 PROMPT_VARIANTS: dict[str, dict] = {
@@ -60,10 +59,10 @@ PROMPT_VARIANTS: dict[str, dict] = {
 # ============= TEST GENERATION BUDGET =============
 GENERATION_BUDGET = {
     "llm_tests_per_prompt": 10,           # 10 basic + 10 edge_focused = 20 per model
-    "llm_models_count": 9,
-    "llm_total_tests": 180,               # 9 × 20
+    "llm_models_count": 8,
+    "llm_total_tests": 160,               # 8 × 20
     "traditional_tests": 5,
-    "total_tests": 185,                   # 180 + 5
+    "total_tests": 165,                   # 160 + 5
 }
 
 NUM_CASES_PER_OPERATION: int = 10
@@ -84,7 +83,7 @@ SPECTRAL_METRIC_WEIGHTS = {
 
 # ============= CSV OUTPUT SCHEMAS =============
 EXECUTED_TESTCASES_FIELDS = [
-    'generator', 'operation_id', 'http_method', 'path', 'tc_id', 'title',
+    'generator', 'prompt_variant', 'operation_id', 'http_method', 'path', 'tc_id', 'title',
     'request_body', 'expected_status', 'expected_result', 'url',
     'actual_status', 'pass', 'tokens_used',
 ]
@@ -128,4 +127,4 @@ def normalize_num_cases(value: object, default: int = NUM_CASES_PER_OPERATION) -
         parsed = default
     return max(1, parsed)
 
-print("✓ Config loaded: 10 generators, 2 prompt strategies, 185 test capacity")
+print("✓ Config loaded: 9 generators, 2 prompt strategies, 165 test capacity")

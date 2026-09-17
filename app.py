@@ -54,6 +54,7 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = config.MAX_UPLOAD_BYTES
+app.config["TEMPLATES_AUTO_RELOAD"] = True
 
 
 def _resolve_upload_folder() -> str:
@@ -527,7 +528,7 @@ def _execute_pipeline(data: dict) -> dict:
                 rows = gen_instance.generate(
                     operations,
                     variant_name=v_name,
-                    variant_desc=v_desc,
+                    variant_desc=v_desc["focus"],
                     num_cases=num_cases,
                 )
                 all_rows.extend(rows)
@@ -762,7 +763,10 @@ def result_data(job_id: str):
     if not result_file or not os.path.exists(result_file):
         return jsonify({"headers": [], "rows": []})
     with open(result_file, "r", encoding="utf-8", newline="") as f:
-        reader = csv.reader(f)
+        # csv.reader NUL (\x00) içeren satırları okuyamaz; eski/bozuk dosyalar
+        # için sonuç ekranının tamamen boş kalmaması adına burada temizliyoruz.
+        cleaned = (line.replace("\x00", "") for line in f)
+        reader = csv.reader(cleaned)
         headers = next(reader, [])
         rows = list(reader)
     return jsonify({"headers": headers, "rows": rows})
