@@ -347,18 +347,19 @@ def parse_args() -> argparse.Namespace:
 
 def _build_llm_generators(selected_keys: list = None) -> list:
     """
-    LLM generator tuple listesi döner: (instance, variant_name, variant_desc)
-    selected_keys: ["openai:gpt-4.1", "gemini:...", "claude:...", "groq:..."]
-                   None ise tümü dahil edilir.
+    TÜM generator tuple'ları döner: (instance, variant_name, variant_desc)
+    - LLM: her model × her prompt_variant (basic + edge_focused)
+    - Traditional: sadece 1 kez (prompt variant yok)
     """
     generators = []
     for key, (cls, model, _provider) in GENERATOR_REGISTRY.items():
-        if key == "traditional":
-            continue
         if selected_keys is not None and key not in selected_keys:
             continue
-        for v_name, v_desc in config.PROMPT_VARIANTS.items():
-            generators.append((cls(model), v_name, v_desc))
+        if key == "traditional":
+            generators.append((cls(), "traditional", "Template baseline"))  # No model arg
+        else:
+            for v_name, v_desc in config.PROMPT_VARIANTS.items():
+                generators.append((cls(model), v_name, v_desc))
     return generators
 
 
