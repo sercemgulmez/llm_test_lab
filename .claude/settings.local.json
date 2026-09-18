@@ -11,7 +11,8 @@
       "Read(//Users/suleymansercemgulmez/.codex/**)",
       "Read(//Users/suleymansercemgulmez/**)",
       "Bash(python -c \"import main; ns = main.parse_args.__wrapped__ if hasattr\\(main.parse_args,'__wrapped__'\\) else None\")",
-      "Bash(python main.py --help)"
+      "Bash(python main.py --help)",
+      "Bash(python -c ' *)"
     ]
   }
 }

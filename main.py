@@ -22,6 +22,7 @@ import time
 from dotenv import load_dotenv
 
 import config
+from models import ApiOperation
 from parsers.openapi import load_openapi_from_url, extract_operations_from_openapi, manual_operations_input
 from parsers.curl_parser import parse_curl_collection
 from generators import TraditionalGenerator, GENERATOR_REGISTRY
@@ -337,10 +338,107 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Üretilen toplam testcase sayısını sınırlar (opsiyonel).",
     )
+    parser.add_argument(
+        "--generators",
+        metavar="LIST",
+        default=None,
+        help=(
+            "Kullanılacak generator'lar, virgülle ayrılmış "
+            "(örn. 'traditional,groq' veya 'openai:gpt-4.1,claude:claude-haiku-4-5'). "
+            "Sağlayıcı adı tek başına verilirse o sağlayıcının tüm modelleri seçilir. "
+            "Belirtilmezse tüm generator'lar kullanılır."
+        ),
+    )
+    parser.add_argument(
+        "--endpoints",
+        metavar="LIST",
+        default=None,
+        help=(
+            "--curl-file / --openapi-url yerine doğrudan 'METHOD /path' çiftleri, "
+            "virgülle ayrılmış (örn. 'GET /status/200,POST /post'). "
+            "--base-url ile birlikte kullanılmalıdır."
+        ),
+    )
     ns = parser.parse_args()
-    ns.selected_generators = None  # Tümünü kullan
+    if ns.generators:
+        try:
+            ns.selected_generators = _parse_cli_generators(ns.generators)
+        except ValueError as e:
+            parser.error(str(e))
+    else:
+        ns.selected_generators = None  # Tümünü kullan
     ns.num_cases = config.normalize_num_cases(ns.num_cases)
     return ns
+
+
+def _parse_cli_generators(spec: str) -> list[str]:
+    """'traditional,groq' ya da 'openai:gpt-4.1' gibi virgülle ayrılmış generator
+    seçimini GENERATOR_REGISTRY anahtar listesine çevirir. Sağlayıcı adı tek
+    başına verilirse (örn. 'groq') o sağlayıcının tüm modelleri eklenir.
+    """
+    known_providers = {"traditional", "openai", "gemini", "claude", "groq"}
+    resolved: list[str] = []
+    unknown: list[str] = []
+    for raw in spec.split(","):
+        token = raw.strip()
+        if not token:
+            continue
+        if token in GENERATOR_REGISTRY:
+            if token not in resolved:
+                resolved.append(token)
+            continue
+        provider = token.lower()
+        if provider in known_providers:
+            matches = [k for k in GENERATOR_REGISTRY if k == provider or k.startswith(f"{provider}:")]
+            if not matches:
+                unknown.append(token)
+                continue
+            resolved.extend(k for k in matches if k not in resolved)
+            continue
+        unknown.append(token)
+
+    if unknown:
+        valid_keys = ", ".join(sorted(GENERATOR_REGISTRY.keys()))
+        raise ValueError(
+            f"Bilinmeyen generator(lar): {', '.join(unknown)}. "
+            f"Geçerli sağlayıcı adları: traditional, openai, gemini, claude, groq "
+            f"(tek başına verilirse tüm modelleri seçer) veya tam anahtar (örn. openai:gpt-4.1). "
+            f"Kayıtlı anahtarlar: {valid_keys}"
+        )
+    if not resolved:
+        raise ValueError("--generators boş bir seçim üretti; en az bir generator belirtin.")
+    return resolved
+
+
+def _parse_cli_endpoints(spec: str) -> list[ApiOperation]:
+    """'GET /status/200,POST /post' gibi virgülle ayrılmış 'METHOD /path' çiftlerinden
+    minimal ApiOperation listesi üretir (şema/parametre bilgisi olmadan).
+    """
+    ops: list[ApiOperation] = []
+    for idx, raw in enumerate(spec.split(","), start=1):
+        entry = raw.strip()
+        if not entry:
+            continue
+        parts = entry.split(maxsplit=1)
+        if len(parts) != 2:
+            raise ValueError(
+                f"Geçersiz endpoint tanımı: '{entry}'. Beklenen format: 'METHOD /path' (örn. 'GET /status/200')."
+            )
+        method, path = parts[0].upper(), parts[1].strip()
+        if not path.startswith("/"):
+            raise ValueError(f"Geçersiz path: '{path}' — '/' ile başlamalı.")
+        ops.append(
+            ApiOperation(
+                op_id=f"EP{idx}",
+                method=method,
+                path=path,
+                summary=f"{method} {path}",
+                description="",
+            )
+        )
+    if not ops:
+        raise ValueError("--endpoints boş bir liste üretti; en az bir 'METHOD /path' girin.")
+    return ops
 
 
 # ── Generator builder ────────────────────────────────────────────────────────
@@ -398,7 +496,12 @@ def _save_cli_run_info(args: argparse.Namespace, operations: list, output_dir: s
     metadata = {
         "job_id": "cli",
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "source": "curl" if args.curl_file else "openapi" if args.openapi_url else "manual",
+        "source": (
+            "curl" if args.curl_file
+            else "openapi" if args.openapi_url
+            else "endpoints" if getattr(args, "endpoints", None)
+            else "manual"
+        ),
         "base_url": args.base_url,
         "no_run": bool(args.no_run),
         "output_dir": output_dir,
@@ -491,6 +594,21 @@ def main() -> None:
             sys.exit(1)
         operations = extract_operations_from_openapi(spec)
         _logger.info("%d operasyon çıkarıldı.", len(operations))
+
+    elif getattr(args, "endpoints", None):
+        if not base_url:
+            _logger.error("HATA: --endpoints ile birlikte --base-url da verilmeli.")
+            sys.exit(1)
+        try:
+            operations = _parse_cli_endpoints(args.endpoints)
+        except ValueError as e:
+            _logger.error("HATA: %s", e)
+            sys.exit(1)
+        _logger.info(
+            "%d endpoint tanımlandı: %s",
+            len(operations),
+            ", ".join(f"{op.method} {op.path}" for op in operations),
+        )
 
     else:
         if not base_url:
