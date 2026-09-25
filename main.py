@@ -21,6 +21,9 @@ import time
 
 from dotenv import load_dotenv
 
+# Load project-local secrets without overriding explicitly exported variables.
+load_dotenv(Path(__file__).resolve().parent / ".env")
+
 import config
 from models import ApiOperation
 from parsers.openapi import load_openapi_from_url, extract_operations_from_openapi, manual_operations_input
@@ -359,6 +362,12 @@ def parse_args() -> argparse.Namespace:
             "--base-url ile birlikte kullanılmalıdır."
         ),
     )
+    parser.add_argument(
+        "--prompt-variant",
+        choices=list(config.PROMPT_VARIANTS.keys()) + ["both"],
+        default="both",
+        help="Kullanılacak prompt variant(lar)ı: 'basic', 'edge_focused', veya 'both' (varsayılan).",
+    )
     ns = parser.parse_args()
     if ns.generators:
         try:
@@ -443,10 +452,10 @@ def _parse_cli_endpoints(spec: str) -> list[ApiOperation]:
 
 # ── Generator builder ────────────────────────────────────────────────────────
 
-def _build_llm_generators(selected_keys: list = None) -> list:
+def _build_llm_generators(selected_keys: list = None, variant_filter: str = "both") -> list:
     """
     TÜM generator tuple'ları döner: (instance, variant_name, variant_desc)
-    - LLM: her model × her prompt_variant (basic + edge_focused)
+    - LLM: her model × seçili prompt_variant(lar)ı (basic + edge_focused, ya da tek biri)
     - Traditional: sadece 1 kez (prompt variant yok)
     """
     generators = []
@@ -457,6 +466,8 @@ def _build_llm_generators(selected_keys: list = None) -> list:
             generators.append((cls(), "traditional", "Template baseline"))  # No model arg
         else:
             for v_name, v_desc in config.PROMPT_VARIANTS.items():
+                if variant_filter != "both" and v_name != variant_filter:
+                    continue
                 generators.append((cls(model), v_name, v_desc["focus"]))
     return generators
 
@@ -648,7 +659,8 @@ def main() -> None:
         _logger.info("  [Geleneksel] %d senaryo üretildi.", len(trad_rows))
 
     # LLM tabanlı generator'lar — dış döngü paralelliği (generator başına bir thread)
-    llm_generators = _build_llm_generators(selected_keys)
+    prompt_variant_filter = getattr(args, "prompt_variant", "both")
+    llm_generators = _build_llm_generators(selected_keys, prompt_variant_filter)
     with ThreadPoolExecutor(max_workers=config.MAX_PARALLEL_GENERATORS) as executor:
         future_to_label = {}
         for gen_instance, v_name, v_desc in llm_generators:

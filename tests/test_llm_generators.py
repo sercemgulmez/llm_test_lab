@@ -17,11 +17,11 @@ def _sample_operation():
 
 def test_openai_generator_uses_mocked_client(monkeypatch):
     class DummyCompletions:
-        def create(self, model, messages, max_tokens=None):
+        def create(self, model, messages, max_completion_tokens=None):
             assert model == "gpt-test"
             assert messages[0]["role"] == "user"
             assert "strict JSON array" in messages[0]["content"]
-            assert isinstance(max_tokens, int) and max_tokens >= 2048
+            assert isinstance(max_completion_tokens, int) and max_completion_tokens >= 2048
             return type(
                 "Resp",
                 (),
@@ -38,8 +38,9 @@ def test_openai_generator_uses_mocked_client(monkeypatch):
             )()
 
     class DummyClient:
-        def __init__(self, api_key):
+        def __init__(self, api_key, timeout=None):
             assert api_key == "openai-key"
+            assert timeout is not None
             self.chat = type("Chat", (), {"completions": DummyCompletions()})()
 
     monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
@@ -55,10 +56,11 @@ def test_openai_generator_uses_mocked_client(monkeypatch):
 
 def test_gemini_generator_uses_mocked_client(monkeypatch):
     class DummyModels:
-        def generate_content(self, model, contents):
+        def generate_content(self, model, contents, config=None):
             assert model == "gemini-test"
             assert "LOGIN" in contents
             assert "strict JSON array" in contents
+            assert config["max_output_tokens"] == 8192
             return type("Resp", (), {"text": 'LOGIN_TC1|Valid|POST /login|-|200|OK'})()
 
     class DummyClient:
@@ -96,8 +98,9 @@ def test_claude_generator_uses_mocked_client(monkeypatch):
             )()
 
     class DummyAnthropicClient:
-        def __init__(self, api_key):
+        def __init__(self, api_key, timeout=None):
             assert api_key == "claude-key"
+            assert timeout is not None
             self.messages = DummyMessages()
 
     class DummyAnthropicModule:
@@ -131,3 +134,20 @@ def test_non_retryable_quota_errors_do_not_retry():
 
     assert rows == []
     assert gen.calls == 1
+
+
+def test_openai_empty_response_is_classified_without_unbounded_retry(monkeypatch):
+    class DummyCompletions:
+        def create(self, **kwargs):
+            return type("Resp", (), {"choices": []})()
+
+    class DummyClient:
+        def __init__(self, **kwargs):
+            self.chat = type("Chat", (), {"completions": DummyCompletions()})()
+
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.setattr("generators.openai_gen.OpenAI", DummyClient)
+
+    generator = OpenAIGenerator("gpt-test")
+    assert generator.generate([_sample_operation()], "basic", "happy path", 1) == []
+    assert generator._aborted is True

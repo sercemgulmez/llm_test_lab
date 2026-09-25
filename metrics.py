@@ -134,7 +134,10 @@ def spectral_ranking(generators: List[str], test_cases: List[Dict],
                 A[i, j] = 1.0
             else:
                 delta = H[i, j].imag * 2
-                A[i, j] = (1.0 + delta) / 2
+                # A higher pass-rate generator should receive stronger incoming
+                # preference, so the pairwise edge is oriented toward the
+                # generator with the higher score.
+                A[i, j] = (1.0 - delta) / 2
     
     row_sums = A.sum(axis=1, keepdims=True)
     row_sums[row_sums == 0] = 1e-10

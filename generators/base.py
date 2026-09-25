@@ -23,11 +23,22 @@ _NON_RETRYABLE_ERROR_MARKERS = (
     "no api key provided",
     "invalid x-api-key",
     "authentication_error",
+    "provider response parsing error",
+    "provider response parse error",
+    "model output format error",
 )
 
 _LIST_PREFIX_RE = re.compile(r"^\s*(?:\d+[.)]\s+|[-*]\s+)")
 _JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.IGNORECASE | re.DOTALL)
 _TRAILING_COMMA_RE = re.compile(r",(\s*[\]}])")
+
+
+class ProviderResponseParseError(RuntimeError):
+    """Provider response object did not contain extractable final text."""
+
+
+class ModelOutputFormatError(RuntimeError):
+    """Extracted model text did not satisfy the testcase output contract."""
 
 
 def _is_non_retryable_generation_error(exc: Exception) -> bool:
@@ -498,6 +509,33 @@ class BaseGenerator(ABC):
     """Tum test senaryosu ureticileri icin temel sinif."""
 
     _aborted: bool = False
+
+    def smoke_test(self) -> List[Dict]:
+        """Tek provider çağrısıyla production request/parser/normalization yolunu doğrula."""
+        op = ApiOperation(
+            op_id="SMOKE",
+            method="GET",
+            path="/smoke",
+            summary="Provider smoke test",
+            description="Generate exactly one minimal valid testcase.",
+            response_schemas={"200": {"description": "OK"}},
+        )
+        prompt = build_llm_prompt(op, 1, "smoke", "Generate one minimal valid testcase.")
+        text, used_tokens = self._request_completion(prompt, 1024, smoke=True)
+        generator_name = f"LLM-{getattr(self, '_provider_label', type(self).__name__)}-{getattr(self, 'model', '')}-smoke"
+        parsed = parse_llm_json_to_rows(text, op, generator_name)
+        valid, invalid = validate_generated_cases(op, parsed, 1)
+        if len(valid) != 1:
+            detail = invalid[0].get("errors", []) if invalid else ["no valid testcase returned"]
+            raise ModelOutputFormatError(
+                f"Model output format error: text_length={len(text)}; validation={detail}"
+            )
+        valid[0]["prompt_variant"] = "smoke"
+        _apply_token_tracking(valid, used_tokens)
+        return valid
+
+    def _request_completion(self, prompt: str, max_tokens: int, smoke: bool = False) -> Tuple[str, int]:
+        raise NotImplementedError("Provider does not implement smoke-test request path.")
 
     def generate(
         self,

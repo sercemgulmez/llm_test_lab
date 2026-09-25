@@ -1,17 +1,12 @@
-"""Smoke-test configured LLM model access without printing API keys."""
+"""Observable, minimal real-API smoke test for every configured LLM model."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from contextlib import redirect_stdout
-import io
+import argparse
 import os
 from pathlib import Path
 import sys
-from typing import Callable
-import warnings
-
-warnings.simplefilter("ignore")
 
 from dotenv import load_dotenv
 
@@ -19,31 +14,30 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import config
-from generators.traditional import TraditionalGenerator
-from models import ApiOperation
+from generators import GENERATOR_REGISTRY
 from security.redaction import redact_secrets
 
+EXPECTED_MODELS = 8
+ENV_BY_PROVIDER = {
+    "OpenAI": "OPENAI_API_KEY",
+    "Gemini": "GEMINI_API_KEY",
+    "Claude": "ANTHROPIC_API_KEY",
+    "Groq": "GROQ_API_KEY",
+}
 
-PROMPT = "Reply only with OK."
-PASS = "PASS"
-MISSING_KEY = "MISSING_KEY"
-INVALID_KEY = "INVALID_KEY"
-MODEL_NOT_FOUND = "MODEL_NOT_FOUND"
-MODEL_ACCESS_DENIED = "MODEL_ACCESS_DENIED"
-RATE_LIMITED = "RATE_LIMITED"
-BILLING_OR_QUOTA = "BILLING_OR_QUOTA"
-REQUEST_ERROR = "REQUEST_ERROR"
-UNKNOWN_ERROR = "UNKNOWN_ERROR"
 
 @dataclass
-class AccessResult:
+class SmokeResult:
     provider: str
     model: str
-    api_key_present: str
-    real_api_call: str
-    result: str
+    status: str
+    error_class: str = ""
     detail: str = ""
+    attempted: bool = False
+
+
+def _emit(message: str = "") -> None:
+    print(message, flush=True)
 
 
 def _safe_error(exc: Exception) -> str:
@@ -54,167 +48,147 @@ def _safe_error(exc: Exception) -> str:
 
 
 def _classify_error(exc: Exception) -> str:
-    status_code = getattr(exc, "status_code", None)
+    status = getattr(exc, "status_code", None)
     code = str(getattr(exc, "code", "") or "").lower()
+    name = exc.__class__.__name__.lower()
     message = str(exc).lower()
-    combined = f"{code} {message}"
-
-    if status_code in (401, 403) and any(term in combined for term in ("invalid", "incorrect", "unauthorized", "authentication")):
-        return INVALID_KEY
-    if any(term in combined for term in ("invalid api key", "incorrect api key", "authentication_error", "unauthorized")):
-        return INVALID_KEY
-    if status_code == 404 or any(
-        term in combined
-        for term in ("model_not_found", "not_found", "not found", "does not exist", "not a valid model", "no longer available")
-    ):
-        return MODEL_NOT_FOUND
-    if status_code == 403 or any(term in combined for term in ("access denied", "permission", "not authorized", "forbidden")):
-        return MODEL_ACCESS_DENIED
-    if status_code == 429 or any(term in combined for term in ("rate limit", "rate_limit", "too many requests")):
-        if any(term in combined for term in ("quota", "billing", "credit", "insufficient_quota")):
-            return BILLING_OR_QUOTA
-        return RATE_LIMITED
+    combined = f"{code} {name} {message}"
+    if "providerresponseparseerror" in combined or "provider response parse error" in combined:
+        return "PROVIDER_RESPONSE_PARSE_ERROR"
+    if "modeloutputformaterror" in combined or "model output format error" in combined:
+        return "MODEL_OUTPUT_FORMAT_ERROR"
+    if isinstance(exc, TimeoutError) or "timeout" in combined or "timed out" in combined:
+        return "TIMEOUT"
+    if any(term in combined for term in ("connection", "network", "dns", "name resolution")):
+        return "NETWORK_ERROR"
+    if status == 401 or any(term in combined for term in ("invalid api key", "incorrect api key", "authentication_error", "unauthorized")):
+        return "AUTH_ERROR"
     if any(term in combined for term in ("quota", "billing", "credit", "insufficient_quota")):
-        return BILLING_OR_QUOTA
-    if status_code in (400, 422) or isinstance(exc, (TypeError, ValueError)):
-        return REQUEST_ERROR
-    return UNKNOWN_ERROR
+        return "BILLING_QUOTA_ERROR"
+    if status == 429 or any(term in combined for term in ("rate limit", "rate_limit", "too many requests")):
+        return "RATE_LIMIT"
+    if status == 404 or any(term in combined for term in ("model_not_found", "model not found", "does not exist", "no longer available")):
+        return "MODEL_NOT_FOUND"
+    if status == 403 or any(term in combined for term in ("access denied", "permission", "not authorized", "forbidden")):
+        return "MODEL_ACCESS_ERROR"
+    if status in (400, 422) or isinstance(exc, (TypeError, ValueError)):
+        return "REQUEST_CONTRACT_ERROR"
+    if status is not None and int(status) >= 500:
+        return "PROVIDER_ERROR"
+    if isinstance(exc, (ImportError, AttributeError, NameError, NotImplementedError)):
+        return "CODE_ERROR"
+    return "UNKNOWN_ERROR"
 
 
-def _run_with_key(provider: str, model: str, env_var: str, call: Callable[[str, str], None]) -> AccessResult:
-    api_key = os.getenv(env_var)
-    if not api_key:
-        return AccessResult(provider, model, "NO", "FAIL", MISSING_KEY, f"{env_var} is not set")
+def _model_specs(registry=None) -> list[tuple[type, str, str]]:
+    registry = GENERATOR_REGISTRY if registry is None else registry
+    return [
+        (generator_class, model, provider)
+        for key, (generator_class, model, provider) in registry.items()
+        if key != "traditional" and model
+    ]
+
+
+def _select_specs(specs: list[tuple[type, str, str]], only: str | None) -> list[tuple[type, str, str]]:
+    if not only:
+        return specs
+    requested = [item.strip().lower() for item in only.split(",") if item.strip()]
+    by_key = {f"{provider.lower()}:{model.lower()}": spec for spec in specs for _cls, model, provider in [spec]}
+    unknown = [item for item in requested if item not in by_key]
+    if unknown:
+        raise ValueError(f"Unknown --only model selection: {', '.join(unknown)}")
+    return [by_key[item] for item in requested]
+
+
+def _run_model(generator_class: type, model: str, provider: str) -> SmokeResult:
+    env_var = ENV_BY_PROVIDER.get(provider)
+    if env_var is None:
+        return SmokeResult(provider, model, "FAIL", "CODE_ERROR", "Unknown provider mapping")
+    if not os.getenv(env_var):
+        return SmokeResult(provider, model, "FAIL", "MISSING_CREDENTIAL", f"{env_var} is not set")
     try:
-        call(api_key, model)
-    except Exception as exc:  # noqa: BLE001 - smoke test must classify every provider error.
-        return AccessResult(provider, model, "YES", "FAIL", _classify_error(exc), _safe_error(exc))
-    return AccessResult(provider, model, "YES", "PASS", PASS)
+        rows = generator_class(model).smoke_test()
+        if len(rows) != 1:
+            raise RuntimeError("Provider response parsing error: smoke normalization returned no row.")
+    except Exception as exc:
+        return SmokeResult(provider, model, "FAIL", _classify_error(exc), _safe_error(exc), attempted=True)
+    return SmokeResult(provider, model, "PASS", attempted=True)
 
 
-def _check_openai(api_key: str, model: str) -> None:
-    from openai import OpenAI
-
-    client = OpenAI(api_key=api_key)
-    client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": PROMPT}],
-        max_tokens=1,
-    )
+def _print_header(specs: list[tuple[type, str, str]], expected: int = EXPECTED_MODELS) -> None:
+    _emit("LLM_TESTLAB REAL API SMOKE TEST")
+    _emit()
+    _emit(f"Expected external models: {expected}")
+    for _generator_class, model, provider in specs:
+        _emit(f"- {provider} | {model}")
+    _emit()
 
 
-def _check_groq(api_key: str, model: str) -> None:
-    from openai import OpenAI
+def _print_result(result: SmokeResult) -> None:
+    if result.status == "PASS":
+        _emit(f"[PASS] {result.provider} | {result.model}")
+        return
+    suffix = f" | {result.error_class}"
+    if result.detail:
+        suffix += f" | {result.detail}"
+    _emit(f"[FAIL] {result.provider} | {result.model}{suffix}")
 
-    client = OpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
-    client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": PROMPT}],
-        max_tokens=1,
-    )
+
+def _print_summary(results: list[SmokeResult], expected: int = EXPECTED_MODELS, targeted: bool = False) -> bool:
+    tested = sum(result.attempted for result in results)
+    passed = sum(result.status == "PASS" for result in results)
+    failed = sum(result.status == "FAIL" for result in results)
+    skipped = sum(result.status == "SKIP" for result in results)
+    successful = len(results) == expected and tested == expected and passed == expected and failed == 0 and skipped == 0
+    _emit()
+    _emit("SMOKE TEST SUMMARY")
+    _emit(f"Expected: {expected}")
+    _emit(f"Tested: {tested}")
+    _emit(f"Passed: {passed}")
+    _emit(f"Failed: {failed}")
+    _emit(f"Skipped: {skipped}")
+    if targeted:
+        _emit(f"TARGETED RETEST: {'PASS' if successful else 'FAIL'}")
+        _emit("READY FOR FULL EXPERIMENT: NO")
+    else:
+        _emit(f"READY FOR FULL EXPERIMENT: {'YES' if successful else 'NO'}")
+    return successful
 
 
-def _check_gemini(api_key: str, model: str) -> None:
-    from google import genai
-
-    client = genai.Client(api_key=api_key)
+def main(registry=None, only: str | None = None) -> int:
+    load_dotenv(PROJECT_ROOT / ".env")
+    all_specs = _model_specs(registry)
     try:
-        client.models.generate_content(
-            model=model,
-            contents=PROMPT,
-            config={"max_output_tokens": 1},
-        )
-    except TypeError:
-        client.models.generate_content(model=model, contents=PROMPT)
+        specs = _select_specs(all_specs, only)
+    except ValueError as exc:
+        _emit(f"[FAIL] Selection | CODE_ERROR | {_safe_error(exc)}")
+        _print_summary([], 0, targeted=True)
+        return 1
+    targeted = bool(only)
+    expected = len(specs) if targeted else EXPECTED_MODELS
+    _print_header(specs, expected)
+    if not targeted and len(specs) != EXPECTED_MODELS:
+        _emit(f"[FAIL] Registry | configured models | NO_MODELS_TESTED | expected {EXPECTED_MODELS}, found {len(specs)}")
+        _print_summary([], EXPECTED_MODELS)
+        return 1
+    results: list[SmokeResult] = []
+    for generator_class, model, provider in specs:
+        _emit(f"[RUN] {provider} | {model}")
+        result = _run_model(generator_class, model, provider)
+        results.append(result)
+        _print_result(result)
+    return 0 if _print_summary(results, expected, targeted=targeted) else 1
 
 
-def _check_anthropic(api_key: str, model: str) -> None:
-    import anthropic
-
-    client = anthropic.Anthropic(api_key=api_key)
-    client.messages.create(
-        model=model,
-        max_tokens=1,
-        messages=[{"role": "user", "content": PROMPT}],
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run minimal real-API model smoke tests.")
+    parser.add_argument(
+        "--only",
+        help="Comma-separated provider:model selections; only those exact configured models are called.",
     )
-
-
-def _check_traditional() -> AccessResult:
-    try:
-        op = ApiOperation(op_id="SMOKE", method="GET", path="/smoke")
-        with redirect_stdout(io.StringIO()):
-            rows = TraditionalGenerator().generate([op], "", "", 1)
-    except Exception as exc:  # noqa: BLE001 - keep final report complete.
-        return AccessResult("Local", "TraditionalGenerator", "N/A", "FAIL", UNKNOWN_ERROR, _safe_error(exc))
-    if rows:
-        return AccessResult("Local", "TraditionalGenerator", "N/A", "PASS", PASS)
-    return AccessResult("Local", "TraditionalGenerator", "N/A", "FAIL", UNKNOWN_ERROR, "No rows generated")
-
-
-def _collect_results() -> list[AccessResult]:
-    results: list[AccessResult] = []
-    for model in config.OPENAI_MODELS:
-        results.append(_run_with_key("OpenAI", model, "OPENAI_API_KEY", _check_openai))
-    for model in config.GEMINI_MODELS:
-        results.append(_run_with_key("Gemini", model, "GEMINI_API_KEY", _check_gemini))
-    for model in config.GROQ_MODELS:
-        results.append(_run_with_key("Groq", model, "GROQ_API_KEY", _check_groq))
-    for model in config.CLAUDE_MODELS:
-        results.append(_run_with_key("Anthropic", model, "ANTHROPIC_API_KEY", _check_anthropic))
-    results.append(_check_traditional())
-    return results
-
-
-def _print_model_configuration() -> None:
-    print("MODEL CONFIGURATION")
-    print("OpenAI:")
-    for model in config.OPENAI_MODELS:
-        print(f"- {model}")
-    print()
-    print("Gemini:")
-    for model in config.GEMINI_MODELS:
-        print(f"- {model}")
-    print()
-    print("Groq:")
-    for model in config.GROQ_MODELS:
-        print(f"- {model}")
-    print()
-    print("Anthropic:")
-    for model in config.CLAUDE_MODELS:
-        print(f"- {model}")
-    print()
-    print("Baseline:")
-    print("- TraditionalGenerator")
-    print()
-
-
-def _print_results(results: list[AccessResult]) -> None:
-    print("API ACCESS RESULTS")
-    print()
-    print("| Provider | Model | API Key Present | Real API Call | Result |")
-    print("|----------|-------|-----------------|---------------|--------|")
-    for item in results:
-        detail = f"{item.result}: {item.detail}" if item.detail and item.result != PASS else item.result
-        print(f"| {item.provider} | {item.model} | {item.api_key_present} | {item.real_api_call} | {detail} |")
-    print()
-
-    failures = [item for item in results if item.result != PASS]
-    ready = not failures
-    print(f"READY FOR EXPERIMENT: {'YES' if ready else 'NO'}")
-    if failures:
-        print()
-        for item in failures:
-            reason = item.detail or item.result
-            print(f"- {item.provider} {item.model}: {item.result} ({reason})")
-
-
-def main() -> int:
-    load_dotenv()
-    results = _collect_results()
-    _print_model_configuration()
-    _print_results(results)
-    return 0 if all(item.result == PASS for item in results) else 1
+    return parser.parse_args()
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    args = _parse_args()
+    raise SystemExit(main(only=args.only))
