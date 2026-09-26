@@ -1,3 +1,5 @@
+import pytest
+
 import config
 import main
 from generators import GENERATOR_REGISTRY
@@ -166,3 +168,63 @@ def test_missing_api_keys_are_skipped_with_warning_not_error(monkeypatch, caplog
     assert len(skipped) == (len(GENERATOR_REGISTRY) - 1) * len(config.PROMPT_VARIANTS)
     # Traditional anahtar gerektirmedigi icin uretim devam etmis olmali.
     assert list(tmp_path.glob("executed_testcases_*.csv")), "Traditional satirlari yazilmali"
+
+
+def test_non_runtime_error_in_generator_does_not_lose_other_results(monkeypatch, tmp_path):
+    """K9: bir generator'in RuntimeError OLMAYAN istisnasi tum kosuyu oldurmemeli.
+
+    Fix oncesi main.py yalnizca RuntimeError yakaliyordu; ValueError as_completed
+    dongusunden disari tasiyor ve save_results_csv'ye HIC ULASILMIYORDU.
+    """
+    from generators.openai_gen import OpenAIGenerator
+
+    monkeypatch.setattr(OpenAIGenerator, "_get_client", lambda self: object())
+
+    def _boom(self, *args, **kwargs):
+        raise ValueError("beklenmedik istisna")
+
+    monkeypatch.setattr(OpenAIGenerator, "generate", _boom)
+    monkeypatch.setattr(main, "load_dotenv", lambda *a, **kw: False)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "main.py",
+            "--endpoints", "GET /get,POST /post",
+            "--base-url", "https://httpbin.org",
+            "--generators", "traditional,openai:gpt-4.1",
+            "--num-cases", "2", "--no-run", "--no-checkpoint",
+            "--output-dir", str(tmp_path),
+        ],
+    )
+
+    main.main()  # cokmemeli
+
+    written = list(tmp_path.glob("executed_testcases_*.csv"))
+    assert written, "Diger generator'larin satirlari yine de yazilmali"
+
+
+def test_unexpected_failure_still_writes_partial_results_and_exits_nonzero(monkeypatch, tmp_path):
+    """K9 dis guvenlik agi: generator dongusu disindaki istisnada bile CSV yazilmali."""
+    def _boom(*args, **kwargs):
+        raise OSError("yurutme fazinda beklenmedik istisna")
+
+    monkeypatch.setattr(main, "run_testcases", _boom)
+    monkeypatch.setattr(main, "load_dotenv", lambda *a, **kw: False)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "main.py",
+            "--endpoints", "GET /get,POST /post",
+            "--base-url", "https://httpbin.org",
+            "--generators", "traditional",
+            "--num-cases", "2", "--no-checkpoint",
+            "--output-dir", str(tmp_path),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        main.main()
+
+    assert exc_info.value.code == 1, "Hatali kosu sifir-disi cikis kodu dondurmeli"
+    written = list(tmp_path.glob("executed_testcases_*.csv"))
+    assert written, "Cokmede bile uretilen satirlar diske yazilmali"

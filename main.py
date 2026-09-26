@@ -700,91 +700,108 @@ def main() -> None:
                      run_checkpoint.run_id, run_checkpoint.run_id)
 
     generation_started_at = time.perf_counter()
+    executed_rows: list = []
+    run_failure: Exception | None = None
 
-    # Geleneksel şablon
-    if selected_keys is None or "traditional" in selected_keys:
-        if "traditional" in completed_tasks:
-            _logger.info("  [Geleneksel] checkpoint'te tamamlanmis, atlandi.")
+    try:
+        # Geleneksel şablon
+        if selected_keys is None or "traditional" in selected_keys:
+            if "traditional" in completed_tasks:
+                _logger.info("  [Geleneksel] checkpoint'te tamamlanmis, atlandi.")
+            else:
+                trad_gen = TraditionalGenerator()
+                trad_rows = trad_gen.generate(operations, "", "", num_cases)
+                all_rows.extend(trad_rows)
+                run_checkpoint.record_generated(trad_rows, "traditional")
+                run_checkpoint.mark_task_done("traditional", len(trad_rows))
+                _logger.info("  [Geleneksel] %d senaryo üretildi.", len(trad_rows))
+
+        # LLM tabanlı generator'lar — dış döngü paralelliği (generator başına bir thread)
+        prompt_variant_filter = getattr(args, "prompt_variant", "both")
+        llm_generators = _build_llm_generators(selected_keys, prompt_variant_filter)
+        with ThreadPoolExecutor(max_workers=config.MAX_PARALLEL_GENERATORS) as executor:
+            future_to_task = {}
+            for gen_instance, v_name, v_desc in llm_generators:
+                gen_label = f"{type(gen_instance).__name__} ({v_name})"
+                task_key = _generation_task_key(gen_instance, v_name)
+                if task_key in completed_tasks:
+                    _logger.info("  [%s] checkpoint'te tamamlanmis, atlandi.", gen_label)
+                    continue
+                # Pre-flight: anahtar yoksa gorevi hic thread'e verme (app.py ile ayni desen).
+                # Aksi halde her operasyon ayri ayri _get_client()'ta patlar ve log dolar.
+                try:
+                    gen_instance._get_client()
+                except RuntimeError as exc:
+                    _logger.warning("  [%s] ATLANDI — %s", gen_label, redact_secrets(str(exc)))
+                    continue
+                _logger.info("  [%s] üretiliyor...", gen_label)
+                future = executor.submit(
+                    gen_instance.generate,
+                    operations,
+                    variant_name=v_name,
+                    variant_desc=v_desc,
+                    num_cases=num_cases,
+                )
+                future_to_task[future] = (gen_label, task_key)
+
+            for future in as_completed(future_to_task):
+                gen_label, task_key = future_to_task[future]
+                try:
+                    rows = future.result()
+                    all_rows.extend(rows)
+                    run_checkpoint.record_generated(rows, task_key)
+                    run_checkpoint.mark_task_done(task_key, len(rows))
+                    _logger.info("  [%s] %d senaryo üretildi.", gen_label, len(rows))
+                except Exception as exc:  # noqa: BLE001 - tek generator tum kosuyu oldurmemeli
+                    _logger.error(
+                        "  [%s] BASARISIZ — %s: %s (diger generator'lar devam ediyor)",
+                        gen_label, type(exc).__name__, redact_secrets(str(exc)),
+                    )
+
+        generation_elapsed = time.perf_counter() - generation_started_at
+        _logger.info("  Üretim süresi: %.1f saniye (%.1f dakika).", generation_elapsed, generation_elapsed / 60)
+
+        max_tests = getattr(args, "max_tests", None)
+        if max_tests and len(all_rows) > max_tests:
+            all_rows = all_rows[:max_tests]
+            _logger.info("  Test sayısı --max-tests ile %d'e sınırlandı.", max_tests)
+
+        _logger.info("\nToplam %d test senaryosu üretildi.", len(all_rows))
+
+        # ── Testleri çalıştır ───────────────────────────────────────────────
+        if args.no_run:
+            _logger.info("Testler çalıştırılmıyor (--no-run / wizard seçimi).")
+            executed_rows = all_rows
         else:
-            trad_gen = TraditionalGenerator()
-            trad_rows = trad_gen.generate(operations, "", "", num_cases)
-            all_rows.extend(trad_rows)
-            run_checkpoint.record_generated(trad_rows, "traditional")
-            run_checkpoint.mark_task_done("traditional", len(trad_rows))
-            _logger.info("  [Geleneksel] %d senaryo üretildi.", len(trad_rows))
-
-    # LLM tabanlı generator'lar — dış döngü paralelliği (generator başına bir thread)
-    prompt_variant_filter = getattr(args, "prompt_variant", "both")
-    llm_generators = _build_llm_generators(selected_keys, prompt_variant_filter)
-    with ThreadPoolExecutor(max_workers=config.MAX_PARALLEL_GENERATORS) as executor:
-        future_to_task = {}
-        for gen_instance, v_name, v_desc in llm_generators:
-            gen_label = f"{type(gen_instance).__name__} ({v_name})"
-            task_key = _generation_task_key(gen_instance, v_name)
-            if task_key in completed_tasks:
-                _logger.info("  [%s] checkpoint'te tamamlanmis, atlandi.", gen_label)
-                continue
-            # Pre-flight: anahtar yoksa gorevi hic thread'e verme (app.py ile ayni desen).
-            # Aksi halde her operasyon ayri ayri _get_client()'ta patlar ve log dolar.
-            try:
-                gen_instance._get_client()
-            except RuntimeError as exc:
-                _logger.warning("  [%s] ATLANDI — %s", gen_label, redact_secrets(str(exc)))
-                continue
-            _logger.info("  [%s] üretiliyor...", gen_label)
-            future = executor.submit(
-                gen_instance.generate,
-                operations,
-                variant_name=v_name,
-                variant_desc=v_desc,
-                num_cases=num_cases,
+            already_executed = run_checkpoint.load_executed_rows()
+            done_identities = {row_identity(row) for row in already_executed}
+            pending_rows = [row for row in all_rows if row_identity(row) not in done_identities]
+            if already_executed:
+                _logger.info(
+                    "  [resume] %d test zaten çalıştırılmış, %d test kaldı.",
+                    len(already_executed), len(pending_rows),
+                )
+            executed_rows = already_executed + run_testcases(
+                base_url,
+                pending_rows,
+                auth_token=args.auth_token,
+                extra_headers=extra_headers or None,
+                cookies=cookies or None,
+                on_result=run_checkpoint.record_executed,
             )
-            future_to_task[future] = (gen_label, task_key)
 
-        for future in as_completed(future_to_task):
-            gen_label, task_key = future_to_task[future]
-            try:
-                rows = future.result()
-                all_rows.extend(rows)
-                run_checkpoint.record_generated(rows, task_key)
-                run_checkpoint.mark_task_done(task_key, len(rows))
-                _logger.info("  [%s] %d senaryo üretildi.", gen_label, len(rows))
-            except RuntimeError as e:
-                _logger.warning("  [%s] ATILDI — %s", gen_label, e)
-
-    generation_elapsed = time.perf_counter() - generation_started_at
-    _logger.info("  Üretim süresi: %.1f saniye (%.1f dakika).", generation_elapsed, generation_elapsed / 60)
-
-    max_tests = getattr(args, "max_tests", None)
-    if max_tests and len(all_rows) > max_tests:
-        all_rows = all_rows[:max_tests]
-        _logger.info("  Test sayısı --max-tests ile %d'e sınırlandı.", max_tests)
-
-    _logger.info("\nToplam %d test senaryosu üretildi.", len(all_rows))
-
-    # ── Testleri çalıştır ───────────────────────────────────────────────
-    if args.no_run:
-        _logger.info("Testler çalıştırılmıyor (--no-run / wizard seçimi).")
-        executed_rows = all_rows
-    else:
-        already_executed = run_checkpoint.load_executed_rows()
-        done_identities = {row_identity(row) for row in already_executed}
-        pending_rows = [row for row in all_rows if row_identity(row) not in done_identities]
-        if already_executed:
-            _logger.info(
-                "  [resume] %d test zaten çalıştırılmış, %d test kaldı.",
-                len(already_executed), len(pending_rows),
-            )
-        executed_rows = already_executed + run_testcases(
-            base_url,
-            pending_rows,
-            auth_token=args.auth_token,
-            extra_headers=extra_headers or None,
-            cookies=cookies or None,
-            on_result=run_checkpoint.record_executed,
+    except Exception as exc:  # noqa: BLE001 - kismi sonuc her halukarda diske yazilmali
+        run_failure = exc
+        _logger.error(
+            "  [KRITIK] Kosu beklenmedik sekilde sonlandi: %s: %s",
+            type(exc).__name__, redact_secrets(str(exc)),
         )
+    finally:
+        run_checkpoint.flush()
 
-    run_checkpoint.flush()
+    # Yurutmeye hic gelinemediyse en azindan uretilen satirlari raporla.
+    if not executed_rows:
+        executed_rows = all_rows
 
     # ── Raporla ────────────────────────────────────────────────────────
     save_results_csv(executed_rows, args.output_dir)
@@ -793,6 +810,13 @@ def main() -> None:
         metrics = compute_generator_metrics(executed_rows)
         save_generator_metrics_csv(metrics, args.output_dir)
         print_summary_table(executed_rows)
+
+    if run_failure is not None:
+        _logger.error(
+            "\nKosu HATAYLA bitti, ancak %d satir diske yazildi: %s/",
+            len(executed_rows), args.output_dir,
+        )
+        sys.exit(1)
 
     _logger.info("\nTamamlandı. Çıktılar: %s/", args.output_dir)
 
