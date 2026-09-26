@@ -25,6 +25,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
 import config
+from checkpoint import DEFAULT_FLUSH_EVERY, RunCheckpoint, row_identity
 from models import ApiOperation
 from parsers.openapi import load_openapi_from_url, extract_operations_from_openapi, manual_operations_input
 from parsers.curl_parser import parse_curl_collection
@@ -363,6 +364,28 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--resume",
+        metavar="RUN_ID",
+        default=None,
+        help=(
+            "Yarida kalmis bir kosuyu surdurur. RUN_ID, <output-dir>/.checkpoints/ "
+            "altindaki klasor adidir (orn. run_20260926_174530). Tamamlanmis uretim "
+            "gorevleri ve calistirilmis testler tekrarlanmaz."
+        ),
+    )
+    parser.add_argument(
+        "--checkpoint-every",
+        metavar="N",
+        type=int,
+        default=DEFAULT_FLUSH_EVERY,
+        help=f"Kac satirda bir checkpoint diske yazilsin (varsayilan {DEFAULT_FLUSH_EVERY}).",
+    )
+    parser.add_argument(
+        "--no-checkpoint",
+        action="store_true",
+        help="Checkpoint yazmayi tamamen kapatir (kisa/deneme kosulari icin).",
+    )
+    parser.add_argument(
         "--prompt-variant",
         choices=list(config.PROMPT_VARIANTS.keys()) + ["both"],
         default="both",
@@ -471,6 +494,12 @@ def _build_llm_generators(selected_keys: list = None, variant_filter: str = "bot
                 continue
             generators.append((cls(model), v_name, v_desc["focus"]))
     return generators
+
+
+def _generation_task_key(gen_instance, variant_name: str) -> str:
+    """Bir uretim gorevi icin checkpoint'te kullanilan kararli anahtar."""
+    model = getattr(gen_instance, "model", "")
+    return f"{type(gen_instance).__name__}:{model}|{variant_name}"
 
 
 def _parse_cli_headers(header_list: list) -> dict:
@@ -650,22 +679,50 @@ def main() -> None:
     num_cases = getattr(args, "num_cases", config.NUM_CASES_PER_OPERATION)
     _save_cli_run_info(args, operations, args.output_dir, selected_keys)
 
+    # ── Checkpoint / resume ──────────────────────────────────────────────
+    run_checkpoint = RunCheckpoint(
+        args.output_dir,
+        run_id=getattr(args, "resume", None),
+        flush_every=getattr(args, "checkpoint_every", DEFAULT_FLUSH_EVERY),
+        enabled=not getattr(args, "no_checkpoint", False),
+    )
+    completed_tasks = run_checkpoint.completed_tasks()
+    if run_checkpoint.resumed:
+        resumed_rows = run_checkpoint.load_generated_rows()
+        all_rows.extend(resumed_rows)
+        _logger.info(
+            "  [resume] %s: %d satir, %d tamamlanmis uretim gorevi yuklendi.",
+            run_checkpoint.run_id, len(resumed_rows), len(completed_tasks),
+        )
+    elif run_checkpoint.enabled:
+        _logger.info("  [checkpoint] run_id=%s — surdurmek icin: --resume %s",
+                     run_checkpoint.run_id, run_checkpoint.run_id)
+
     generation_started_at = time.perf_counter()
 
     # Geleneksel şablon
     if selected_keys is None or "traditional" in selected_keys:
-        trad_gen = TraditionalGenerator()
-        trad_rows = trad_gen.generate(operations, "", "", num_cases)
-        all_rows.extend(trad_rows)
-        _logger.info("  [Geleneksel] %d senaryo üretildi.", len(trad_rows))
+        if "traditional" in completed_tasks:
+            _logger.info("  [Geleneksel] checkpoint'te tamamlanmis, atlandi.")
+        else:
+            trad_gen = TraditionalGenerator()
+            trad_rows = trad_gen.generate(operations, "", "", num_cases)
+            all_rows.extend(trad_rows)
+            run_checkpoint.record_generated(trad_rows, "traditional")
+            run_checkpoint.mark_task_done("traditional", len(trad_rows))
+            _logger.info("  [Geleneksel] %d senaryo üretildi.", len(trad_rows))
 
     # LLM tabanlı generator'lar — dış döngü paralelliği (generator başına bir thread)
     prompt_variant_filter = getattr(args, "prompt_variant", "both")
     llm_generators = _build_llm_generators(selected_keys, prompt_variant_filter)
     with ThreadPoolExecutor(max_workers=config.MAX_PARALLEL_GENERATORS) as executor:
-        future_to_label = {}
+        future_to_task = {}
         for gen_instance, v_name, v_desc in llm_generators:
             gen_label = f"{type(gen_instance).__name__} ({v_name})"
+            task_key = _generation_task_key(gen_instance, v_name)
+            if task_key in completed_tasks:
+                _logger.info("  [%s] checkpoint'te tamamlanmis, atlandi.", gen_label)
+                continue
             _logger.info("  [%s] üretiliyor...", gen_label)
             future = executor.submit(
                 gen_instance.generate,
@@ -674,13 +731,15 @@ def main() -> None:
                 variant_desc=v_desc,
                 num_cases=num_cases,
             )
-            future_to_label[future] = gen_label
+            future_to_task[future] = (gen_label, task_key)
 
-        for future in as_completed(future_to_label):
-            gen_label = future_to_label[future]
+        for future in as_completed(future_to_task):
+            gen_label, task_key = future_to_task[future]
             try:
                 rows = future.result()
                 all_rows.extend(rows)
+                run_checkpoint.record_generated(rows, task_key)
+                run_checkpoint.mark_task_done(task_key, len(rows))
                 _logger.info("  [%s] %d senaryo üretildi.", gen_label, len(rows))
             except RuntimeError as e:
                 _logger.warning("  [%s] ATILDI — %s", gen_label, e)
@@ -700,13 +759,24 @@ def main() -> None:
         _logger.info("Testler çalıştırılmıyor (--no-run / wizard seçimi).")
         executed_rows = all_rows
     else:
-        executed_rows = run_testcases(
+        already_executed = run_checkpoint.load_executed_rows()
+        done_identities = {row_identity(row) for row in already_executed}
+        pending_rows = [row for row in all_rows if row_identity(row) not in done_identities]
+        if already_executed:
+            _logger.info(
+                "  [resume] %d test zaten çalıştırılmış, %d test kaldı.",
+                len(already_executed), len(pending_rows),
+            )
+        executed_rows = already_executed + run_testcases(
             base_url,
-            all_rows,
+            pending_rows,
             auth_token=args.auth_token,
             extra_headers=extra_headers or None,
             cookies=cookies or None,
+            on_result=run_checkpoint.record_executed,
         )
+
+    run_checkpoint.flush()
 
     # ── Raporla ────────────────────────────────────────────────────────
     save_results_csv(executed_rows, args.output_dir)
