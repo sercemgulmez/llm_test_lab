@@ -3,7 +3,7 @@
 import json
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
 import requests
@@ -294,11 +294,15 @@ def run_testcases(
     auth_token: Optional[str] = None,
     extra_headers: Optional[Dict] = None,
     cookies: Optional[Dict] = None,
+    on_result: Optional[Callable[[Dict], None]] = None,
 ) -> List[Dict]:
     """
     Execute generated scenarios against the real API.
 
     Returns each row with `url`, `actual_status`, `actual_body`, `assertion_results`, and `pass`.
+
+    `on_result` verilirse her satir tamamlandiginda cagrilir; uzun kosularda
+    checkpoint yazmak icin kullanilir (bkz. checkpoint.RunCheckpoint).
     """
     _logger.info("\n=== Test senaryolari calistiriliyor ===")
     session = requests.Session()
@@ -366,5 +370,7 @@ def run_testcases(
         new_row["assertion_results"] = assertion_results
         new_row["pass"] = passed
         executed.append(new_row)
+        if on_result is not None:
+            on_result(new_row)
 
     return executed
