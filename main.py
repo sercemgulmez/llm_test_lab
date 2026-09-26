@@ -454,21 +454,22 @@ def _parse_cli_endpoints(spec: str) -> list[ApiOperation]:
 
 def _build_llm_generators(selected_keys: list = None, variant_filter: str = "both") -> list:
     """
-    TÜM generator tuple'ları döner: (instance, variant_name, variant_desc)
+    Yalnizca LLM generator tuple'lari doner: (instance, variant_name, variant_desc)
     - LLM: her model × seçili prompt_variant(lar)ı (basic + edge_focused, ya da tek biri)
-    - Traditional: sadece 1 kez (prompt variant yok)
+    - Traditional BURADA URETILMEZ: main() icinde ayrica calistiriliyor. Buraya da
+      eklenirse ayni operasyonlar icin iki kez kosar ve birebir ayni tc_id'leri
+      uretir (duplicate satir + bozuk diversity metrikleri).
     """
     generators = []
     for key, (cls, model, _provider) in GENERATOR_REGISTRY.items():
         if selected_keys is not None and key not in selected_keys:
             continue
         if key == "traditional":
-            generators.append((cls(), "traditional", "Template baseline"))  # No model arg
-        else:
-            for v_name, v_desc in config.PROMPT_VARIANTS.items():
-                if variant_filter != "both" and v_name != variant_filter:
-                    continue
-                generators.append((cls(model), v_name, v_desc["focus"]))
+            continue
+        for v_name, v_desc in config.PROMPT_VARIANTS.items():
+            if variant_filter != "both" and v_name != variant_filter:
+                continue
+            generators.append((cls(model), v_name, v_desc["focus"]))
     return generators
 
 

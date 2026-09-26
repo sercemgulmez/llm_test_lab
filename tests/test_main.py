@@ -86,3 +86,45 @@ def test_traditional_generator_does_not_require_api_key(monkeypatch):
 
     assert len(rows) == 1
     assert rows[0]["generator"] == TraditionalGenerator.GENERATOR_NAME
+
+
+def test_build_llm_generators_excludes_traditional_to_prevent_double_run():
+    """K2 regresyonu: Traditional main() icinde ayrica kosuyor.
+
+    _build_llm_generators onu tekrar dondururse ayni operasyonlar icin iki kez
+    calisir ve birebir ayni tc_id'leri uretir.
+    """
+    generators = main._build_llm_generators(None)
+
+    assert generators, "En az bir LLM generator beklenir"
+    assert not any(
+        isinstance(generator, TraditionalGenerator) for generator, _, _ in generators
+    ), "Traditional _build_llm_generators tarafindan dondurulmemeli (K2)"
+    assert not any(v_name == "traditional" for _, v_name, _ in generators)
+
+    # 8 LLM modeli × 2 prompt variant = 16 tuple; Traditional bunlara dahil degil.
+    llm_model_count = len(GENERATOR_REGISTRY) - 1
+    assert len(generators) == llm_model_count * len(config.PROMPT_VARIANTS)
+
+
+def test_build_llm_generators_ignores_traditional_even_when_explicitly_selected():
+    """'traditional' acikca secilse bile LLM listesine sizmamali (K2)."""
+    generators = main._build_llm_generators(["traditional"])
+
+    assert generators == []
+
+
+def test_traditional_rows_are_not_duplicated_end_to_end():
+    """K2: tek gecisten uretilen Traditional satirlarinda duplicate tc_id olmamali."""
+    ops = [
+        ApiOperation(op_id="EP1", method="GET", path="/get"),
+        ApiOperation(op_id="EP2", method="POST", path="/post"),
+    ]
+
+    rows = TraditionalGenerator().generate(ops, "", "", 3)
+
+    identities = [
+        (row["generator"], row.get("prompt_variant", ""), row["tc_id"]) for row in rows
+    ]
+    assert len(identities) == len(set(identities)), f"Duplicate tc_id: {identities}"
+    assert len(rows) == 6  # 2 operasyon × 3 case
