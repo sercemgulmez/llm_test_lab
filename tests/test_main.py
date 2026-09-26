@@ -128,3 +128,41 @@ def test_traditional_rows_are_not_duplicated_end_to_end():
     ]
     assert len(identities) == len(set(identities)), f"Duplicate tc_id: {identities}"
     assert len(rows) == 6  # 2 operasyon × 3 case
+
+
+def test_missing_api_keys_are_skipped_with_warning_not_error(monkeypatch, caplog, tmp_path):
+    """K8: anahtarsiz generator'lar pre-flight'ta atlanir.
+
+    Orijinal denetim iddiasi ("main() cokuyor") ampirik olarak yanlisti; gercek
+    kusur log seviyesiydi: her gorev ERROR uretiyordu. Pre-flight sonrasi hicbir
+    ERROR olmamali, gorev basina tek WARNING olmali ve Traditional devam etmeli.
+    """
+    import logging
+
+    for env_var in ("OPENAI_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY", "ANTHROPIC_API_KEY"):
+        monkeypatch.delenv(env_var, raising=False)
+    monkeypatch.setattr(main, "load_dotenv", lambda *a, **kw: False)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "main.py",
+            "--endpoints", "GET /get,POST /post",
+            "--base-url", "https://httpbin.org",
+            "--num-cases", "2",
+            "--no-run",
+            "--no-checkpoint",
+            "--output-dir", str(tmp_path),
+        ],
+    )
+
+    with caplog.at_level(logging.WARNING):
+        main.main()  # cokmemeli
+
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    skipped = [r for r in caplog.records if "ATLANDI" in r.getMessage()]
+
+    assert not errors, f"Eksik anahtar ERROR uretmemeli: {[r.getMessage() for r in errors]}"
+    # 8 LLM modeli × 2 prompt variant = 16 gorev, her biri bir kez atlanir.
+    assert len(skipped) == (len(GENERATOR_REGISTRY) - 1) * len(config.PROMPT_VARIANTS)
+    # Traditional anahtar gerektirmedigi icin uretim devam etmis olmali.
+    assert list(tmp_path.glob("executed_testcases_*.csv")), "Traditional satirlari yazilmali"

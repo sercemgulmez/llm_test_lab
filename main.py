@@ -29,6 +29,7 @@ from checkpoint import DEFAULT_FLUSH_EVERY, RunCheckpoint, row_identity
 from models import ApiOperation
 from parsers.openapi import load_openapi_from_url, extract_operations_from_openapi, manual_operations_input
 from parsers.curl_parser import parse_curl_collection
+from security.redaction import redact_secrets
 from generators import TraditionalGenerator, GENERATOR_REGISTRY
 from runner import run_testcases
 from reporters.csv_reporter import (
@@ -722,6 +723,13 @@ def main() -> None:
             task_key = _generation_task_key(gen_instance, v_name)
             if task_key in completed_tasks:
                 _logger.info("  [%s] checkpoint'te tamamlanmis, atlandi.", gen_label)
+                continue
+            # Pre-flight: anahtar yoksa gorevi hic thread'e verme (app.py ile ayni desen).
+            # Aksi halde her operasyon ayri ayri _get_client()'ta patlar ve log dolar.
+            try:
+                gen_instance._get_client()
+            except RuntimeError as exc:
+                _logger.warning("  [%s] ATLANDI — %s", gen_label, redact_secrets(str(exc)))
                 continue
             _logger.info("  [%s] üretiliyor...", gen_label)
             future = executor.submit(
