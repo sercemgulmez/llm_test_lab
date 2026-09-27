@@ -702,6 +702,7 @@ def main() -> None:
     generation_started_at = time.perf_counter()
     executed_rows: list = []
     run_failure: Exception | None = None
+    failed_generations: list[dict] = []
 
     try:
         # Geleneksel şablon
@@ -753,10 +754,31 @@ def main() -> None:
                     run_checkpoint.mark_task_done(task_key, len(rows))
                     _logger.info("  [%s] %d senaryo üretildi.", gen_label, len(rows))
                 except Exception as exc:  # noqa: BLE001 - tek generator tum kosuyu oldurmemeli
+                    # Bu gorevin uretmesi beklenen satir sayisi = kaybedilen satir sayisi.
+                    lost_rows = num_cases * len(operations)
+                    failed_generations.append({
+                        "generator": gen_label,
+                        "error_type": type(exc).__name__,
+                        "error": redact_secrets(str(exc)),
+                        "lost_rows": lost_rows,
+                    })
                     _logger.error(
-                        "  [%s] BASARISIZ — %s: %s (diger generator'lar devam ediyor)",
-                        gen_label, type(exc).__name__, redact_secrets(str(exc)),
+                        "  [%s] BASARISIZ — %s: %s | ~%d satir uretilemedi "
+                        "(diger generator'lar devam ediyor)",
+                        gen_label, type(exc).__name__, redact_secrets(str(exc)), lost_rows,
                     )
+
+        if failed_generations:
+            total_lost = sum(item["lost_rows"] for item in failed_generations)
+            _logger.error(
+                "\n── BASARISIZ GENERATOR OZETI — %d gorev, ~%d satir eksik ──",
+                len(failed_generations), total_lost,
+            )
+            for item in failed_generations:
+                _logger.error(
+                    "  %s | %s | ~%d satir | %s",
+                    item["generator"], item["error_type"], item["lost_rows"], item["error"],
+                )
 
         generation_elapsed = time.perf_counter() - generation_started_at
         _logger.info("  Üretim süresi: %.1f saniye (%.1f dakika).", generation_elapsed, generation_elapsed / 60)
@@ -810,6 +832,14 @@ def main() -> None:
         metrics = compute_generator_metrics(executed_rows)
         save_generator_metrics_csv(metrics, args.output_dir)
         print_summary_table(executed_rows)
+
+    if failed_generations:
+        total_lost = sum(item["lost_rows"] for item in failed_generations)
+        _logger.error(
+            "\nUYARI: %d generator basarisiz oldu, ~%d satir eksik. Detay icin "
+            "yukaridaki BASARISIZ GENERATOR OZETI bolumune bakin.",
+            len(failed_generations), total_lost,
+        )
 
     if run_failure is not None:
         _logger.error(

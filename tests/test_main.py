@@ -228,3 +228,41 @@ def test_unexpected_failure_still_writes_partial_results_and_exits_nonzero(monke
     assert exc_info.value.code == 1, "Hatali kosu sifir-disi cikis kodu dondurmeli"
     written = list(tmp_path.glob("executed_testcases_*.csv"))
     assert written, "Cokmede bile uretilen satirlar diske yazilmali"
+
+
+def test_failed_generator_reports_which_generator_type_and_lost_rows(monkeypatch, caplog, tmp_path):
+    """K9: basarisiz generator icin hangi generator / hata tipi / kac satir kaybi loglanmali."""
+    import logging
+
+    from generators.openai_gen import OpenAIGenerator
+
+    monkeypatch.setattr(OpenAIGenerator, "_get_client", lambda self: object())
+
+    def _boom(self, *args, **kwargs):
+        raise ValueError("beklenmedik istisna")
+
+    monkeypatch.setattr(OpenAIGenerator, "generate", _boom)
+    monkeypatch.setattr(main, "load_dotenv", lambda *a, **kw: False)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "main.py",
+            "--endpoints", "GET /get,POST /post",
+            "--base-url", "https://httpbin.org",
+            "--generators", "traditional,openai:gpt-4.1",
+            "--num-cases", "3", "--no-run", "--no-checkpoint",
+            "--output-dir", str(tmp_path),
+        ],
+    )
+
+    with caplog.at_level(logging.ERROR):
+        main.main()
+
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+
+    assert "OpenAIGenerator" in messages, "hangi generator oldugu loglanmali"
+    assert "ValueError" in messages, "hata tipi loglanmali"
+    # 3 case × 2 operasyon = 6 satir, 2 variant gorevi icin ayri ayri.
+    assert "~6 satir" in messages, "kaybedilen satir sayisi loglanmali"
+    assert "BASARISIZ GENERATOR OZETI" in messages, "kosu sonunda toplu ozet olmali"
+    assert "~12 satir eksik" in messages, "toplam kayip ozette yer almali"
