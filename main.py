@@ -33,6 +33,8 @@ from security.redaction import redact_secrets
 from generators import TraditionalGenerator, GENERATOR_REGISTRY
 from runner import run_testcases
 from reporters.csv_reporter import (
+    compute_repetition_stats,
+    format_repetition_table,
     save_operations_csv,
     save_results_csv,
     compute_generator_metrics,
@@ -924,6 +926,12 @@ def main() -> None:
 
     # ── Raporla ────────────────────────────────────────────────────────
     save_results_csv(executed_rows, args.output_dir)
+
+    # Icerik tekrari (K1): ayni istegi ayni beklentiyle tekrar eden satirlar.
+    if executed_rows:
+        _logger.info("\n── ICERIK TEKRARI (tc_id ve title haric imza) ──")
+        for line in format_repetition_table(compute_repetition_stats(executed_rows)):
+            _logger.info("  %s", line)
 
     if not args.no_run:
         metrics = compute_generator_metrics(executed_rows)

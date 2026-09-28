@@ -137,6 +137,82 @@ def save_generator_metrics_csv(rows: List[Dict], output_dir: str) -> str:
     return path
 
 
+# ── Icerik tekrari (K1) ────────────────────────────────────────────────────────
+
+# Satirin "ayni testi" temsil edip etmedigini belirleyen alanlar.
+# tc_id ve title BILEREK disarida: Traditional'in dolgu satirlari yalnizca
+# baslik numarasinda ayrisiyor ve ayni istegi ayni beklentiyle tekrarliyor.
+#
+# SINIR: CSV query_params / headers / path_params kolonlarini icermedigi icin
+# imza yalnizca request_body seviyesinde ayrim yapabilir. Bu, tekrari
+# OLDUGUNDAN AZ gosterebilir, asla fazla gostermez.
+CONTENT_SIGNATURE_FIELDS = (
+    "operation_id", "http_method", "path", "request_body",
+    "expected_status", "expected_result", "test_type", "priority",
+)
+
+
+def content_signature(row: Dict) -> str:
+    """Bir satirin icerik imzasi (tc_id ve title haric)."""
+    return "\x1f".join(str(row.get(field, "")) for field in CONTENT_SIGNATURE_FIELDS)
+
+
+def compute_repetition_stats(rows: List[Dict]) -> List[Dict]:
+    """Generator basina toplam satir, farkli icerik ve tekrar orani.
+
+    pass_rate iki tabanda hesaplanir:
+      - total    : tum satirlar uzerinden (klasik)
+      - distinct : ayni icerigin ilk ornegi alinarak, tekrarlar sayilmadan
+    """
+    groups: Dict[str, List[Dict]] = defaultdict(list)
+    for row in rows:
+        groups[str(row.get("generator", ""))].append(row)
+
+    stats: List[Dict] = []
+    for generator, gen_rows in sorted(groups.items()):
+        seen: Dict[str, Dict] = {}
+        for row in gen_rows:
+            seen.setdefault(content_signature(row), row)
+        total = len(gen_rows)
+        distinct = len(seen)
+
+        def _rate(sample: List[Dict]):
+            passed = sum(1 for r in sample if r.get("pass") is True or str(r.get("pass")) == "True")
+            failed = sum(1 for r in sample if r.get("pass") is False or str(r.get("pass")) == "False")
+            evaluated = passed + failed
+            return round(passed / evaluated, 3) if evaluated else None
+
+        stats.append({
+            "generator": generator,
+            "total_rows": total,
+            "distinct_contents": distinct,
+            "repeated_rows": total - distinct,
+            "repetition_rate": round((total - distinct) / total, 4) if total else 0.0,
+            "pass_rate_total": _rate(gen_rows),
+            "pass_rate_distinct": _rate(list(seen.values())),
+        })
+    return stats
+
+
+def format_repetition_table(stats: List[Dict]) -> List[str]:
+    """Konsola/loga basilacak tekrar tablosunu satir listesi olarak doner."""
+    if not stats:
+        return ["Tekrar istatistigi icin satir yok."]
+    width = max(max(len(s["generator"]) for s in stats), 9)
+    lines = [
+        f"{'Generator':<{width}}  {'Satir':>6}  {'Farkli':>6}  {'Tekrar':>6}  {'Oran':>7}  {'Pass(tum)':>9}  {'Pass(farkli)':>12}",
+        "-" * (width + 56),
+    ]
+    for s in stats:
+        pt = "N/A" if s["pass_rate_total"] is None else f"{s['pass_rate_total']:.1%}"
+        pd = "N/A" if s["pass_rate_distinct"] is None else f"{s['pass_rate_distinct']:.1%}"
+        lines.append(
+            f"{s['generator']:<{width}}  {s['total_rows']:>6}  {s['distinct_contents']:>6}  "
+            f"{s['repeated_rows']:>6}  {s['repetition_rate']:>6.1%}  {pt:>9}  {pd:>12}"
+        )
+    return lines
+
+
 def _tokenize_testcase(row: Dict) -> set[str]:
     """Testcase'i kaba semantik imza için token setine çevirir."""
     parts = [
