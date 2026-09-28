@@ -35,10 +35,15 @@ class TraditionalGenerator(BaseGenerator):
         if num_cases <= 0:
             num_cases = 5
 
+        num_cases_by_op = _kwargs.get("num_cases_by_op")
+
         rows: List[Dict] = []
         for op in operations:
+            op_cases = num_cases
+            if isinstance(num_cases_by_op, dict):
+                op_cases = num_cases_by_op.get(op.op_id, num_cases)
             print(f"[Traditional] {op.op_id} ({op.method} {op.path}) schema-aware senaryolar uretiliyor...")
-            rows.extend(self._generate_for_operation(op, "", "", num_cases))
+            rows.extend(self._generate_for_operation(op, "", "", op_cases))
         return rows
 
     def _generate_for_operation(

@@ -49,7 +49,8 @@ def test_openai_generator_uses_mocked_client(monkeypatch):
     rows = OpenAIGenerator("gpt-test").generate([_sample_operation()], "basic", "happy path", 1)
 
     assert len(rows) == 1
-    assert rows[0]["generator"] == "LLM-OpenAI-gpt-test-basic"
+    assert rows[0]["generator"] == "LLM-OpenAI-gpt-test"
+    assert rows[0]["prompt_variant"] == "basic"  # variant ad yerine kolonda tasinir
     assert rows[0]["expected_status"] == 200
     assert rows[0]["tokens_used"] == 350
 
@@ -77,7 +78,8 @@ def test_gemini_generator_uses_mocked_client(monkeypatch):
     rows = GeminiGenerator("gemini-test").generate([_sample_operation()], "basic", "happy path", 1)
 
     assert len(rows) == 1
-    assert rows[0]["generator"] == "LLM-Gemini-gemini-test-basic"
+    assert rows[0]["generator"] == "LLM-Gemini-gemini-test"
+    assert rows[0]["prompt_variant"] == "basic"  # variant ad yerine kolonda tasinir
     assert rows[0]["request_body"] == ""
 
 
@@ -112,7 +114,8 @@ def test_claude_generator_uses_mocked_client(monkeypatch):
     rows = ClaudeGenerator("claude-test").generate([_sample_operation()], "basic", "happy path", 1)
 
     assert len(rows) == 1
-    assert rows[0]["generator"] == "LLM-Claude-claude-test-basic"
+    assert rows[0]["generator"] == "LLM-Claude-claude-test"
+    assert rows[0]["prompt_variant"] == "basic"  # variant ad yerine kolonda tasinir
     assert rows[0]["expected_result"] == "OK"
     assert rows[0]["tokens_used"] == 250  # 200 input + 50 output
 

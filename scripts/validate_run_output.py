@@ -38,6 +38,11 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from call_ledger import CallLedger, summarize_by_generator, total_spend
+from reporters.csv_reporter import (
+    CONTENT_SIGNATURE_FIELDS,
+    compute_repetition_stats,
+    format_repetition_table,
+)
 
 # Bos olmamasi gereken kolonlar. actual_status / pass yalnizca --executed ile zorunlu.
 CRITICAL_COLUMNS = ("generator", "operation_id", "http_method", "path", "tc_id", "title")
@@ -436,6 +441,27 @@ def check_call_ledger(
     return records
 
 
+def check_content_repetition(rows: list[dict], fieldnames: list[str], findings: Findings) -> None:
+    """Generator basina icerik tekrari: toplam satir, farkli icerik, tekrar orani."""
+    missing = [f for f in CONTENT_SIGNATURE_FIELDS if f not in fieldnames]
+    if missing:
+        findings.add("UYARI", f"Icerik imzasi alanlari CSV'de eksik: {', '.join(missing)}")
+
+    stats = compute_repetition_stats(rows)
+    findings.add("BILGI", "Icerik tekrari (tc_id ve title haric imza):")
+    for line in format_repetition_table(stats):
+        findings.add("BILGI", f"  {line}")
+
+    for item in stats:
+        if item["repeated_rows"]:
+            findings.add(
+                "UYARI",
+                f"'{item['generator']}': {item['total_rows']} satirin yalnizca "
+                f"{item['distinct_contents']}'i farkli icerik "
+                f"({item['repetition_rate']:.1%} tekrar).",
+            )
+
+
 def check_status_sanity(rows: list[dict], fieldnames: list[str], executed: bool, findings: Findings) -> None:
     if "expected_status" in fieldnames:
         distribution = Counter(str(row.get("expected_status", "")).strip() for row in rows)
@@ -530,6 +556,7 @@ def main(argv: list[str] | None = None) -> int:
         rows, args.expected_generators, args.expected_per_generator, args.tolerance, findings
     )
     ledger_records = check_call_ledger(args.output_dir, args.fallback_threshold, findings)
+    check_content_repetition(rows, fieldnames, findings)
     check_tokens(rows, fieldnames, findings, ledger_records)
     check_cost(rows, fieldnames, findings, ledger_records)
     check_status_sanity(rows, fieldnames, args.executed, findings)

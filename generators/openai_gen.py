@@ -117,7 +117,7 @@ class OpenAIGenerator(BaseGenerator):
         num_cases: int,
     ) -> List[Dict]:
         client = self._get_client()
-        generator_name = f"LLM-{self._provider_label}-{self.model}-{variant_name}"
+        generator_name = f"LLM-{self._provider_label}-{self.model}"
         _logger.info("[%s - %s - %s] %s (%s %s) üretiliyor...", self._provider_label, self.model, variant_name, op.op_id, op.method, op.path)
 
         def request_completion(prompt: str) -> tuple[str, int]:

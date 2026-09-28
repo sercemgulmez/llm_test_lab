@@ -77,7 +77,7 @@ class ClaudeGenerator(BaseGenerator):
         num_cases: int,
     ) -> List[Dict]:
         client = self._get_client()
-        generator_name = f"LLM-Claude-{self.model}-{variant_name}"
+        generator_name = f"LLM-Claude-{self.model}"
         _logger.info("[Claude - %s - %s] %s (%s %s) üretiliyor...", self.model, variant_name, op.op_id, op.method, op.path)
 
         def request_completion(prompt: str) -> tuple[str, int]:
