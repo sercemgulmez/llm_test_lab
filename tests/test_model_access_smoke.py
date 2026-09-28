@@ -6,15 +6,36 @@ from generators.base import ProviderResponseParseError
 from scripts import check_model_access as smoke
 
 
+class _FakeModels:
+    """Saglayicinin model metadata ucu — token uretmez."""
+
+    def retrieve(self, model):
+        return {"id": model}
+
+    def get(self, model):
+        return {"name": model}
+
+
+class _FakeClient:
+    def __init__(self):
+        self.models = _FakeModels()
+
+
 class _PassGenerator:
     def __init__(self, model):
         self.model = model
+
+    def _get_client(self):
+        return _FakeClient()
 
     def smoke_test(self):
         return [{"generator": self.model}]
 
 
 class _FailGenerator(_PassGenerator):
+    def _get_client(self):
+        raise RuntimeError("invalid api key sk-proj-" + "A" * 48)
+
     def smoke_test(self):
         raise RuntimeError("invalid api key sk-proj-" + "A" * 48)
 
@@ -43,7 +64,7 @@ def test_main_prints_observable_success_summary(monkeypatch, capsys):
     monkeypatch.setattr(smoke, "load_dotenv", lambda *args, **kwargs: False)
     assert smoke.main(_registry()) == 0
     output = capsys.readouterr().out
-    assert "LLM_TESTLAB REAL API SMOKE TEST" in output
+    assert "LLM_TESTLAB REAL API ACCESS CHECK" in output
     assert output.count("[RUN]") == 8
     assert output.count("[PASS]") == 8
     assert "Expected: 8" in output
@@ -158,3 +179,52 @@ def test_groq_120b_smoke_excludes_reasoning_without_exposing_it():
     assert captured["extra_body"] == {"include_reasoning": False}
     assert "private-reasoning-value" not in str(exc_info.value)
     assert "reasoning_length=23" in str(exc_info.value)
+
+
+# ── Para harcama kurali ───────────────────────────────────────────────────
+
+def test_paid_providers_never_generate_by_default(monkeypatch, capsys):
+    """Varsayilan modda UCRETLI saglayiciya URETIM cagrisi YAPILMAZ."""
+    generated: list = []
+
+    class _Tracking(_PassGenerator):
+        def smoke_test(self):
+            generated.append(self.model)
+            return [{"generator": self.model}]
+
+    _set_dummy_credentials(monkeypatch)
+    monkeypatch.setattr(smoke, "load_dotenv", lambda *a, **k: False)
+    assert smoke.main(_registry(_Tracking)) == 0
+    output = capsys.readouterr().out
+
+    # 4 ucretsiz model (Gemini x2, Groq x2) uretti; 4 ucretli (OpenAI, Claude) URETMEDI.
+    assert len(generated) == 4, f"ucretli saglayici uretim yapti: {generated}"
+    assert output.count("metadata") >= 4
+    assert "PAID" in output and "free" in output
+
+
+def test_paid_generation_requires_explicit_flag(monkeypatch, capsys):
+    generated: list = []
+
+    class _Tracking(_PassGenerator):
+        def smoke_test(self):
+            generated.append(self.model)
+            return [{"generator": self.model}]
+
+    _set_dummy_credentials(monkeypatch)
+    monkeypatch.setattr(smoke, "load_dotenv", lambda *a, **k: False)
+    assert smoke.main(_registry(_Tracking), allow_paid_generation=True) == 0
+    capsys.readouterr()
+    assert len(generated) == 8, "bayrak verilince hepsi uretim yapmali"
+
+
+def test_output_never_leaks_credentials(monkeypatch, capsys):
+    _set_dummy_credentials(monkeypatch)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-proj-" + "B" * 48)
+    monkeypatch.setattr(smoke, "load_dotenv", lambda *a, **k: False)
+    smoke.main(_registry(_FailGenerator))
+    output = capsys.readouterr().out
+    assert "sk-proj-" + "B" * 48 not in output
+    assert "sk-proj-" + "A" * 48 not in output
+    for word in ("balance", "credit", "quota remaining"):
+        assert word not in output.lower()

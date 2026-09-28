@@ -1,4 +1,17 @@
-"""Observable, minimal real-API smoke test for every configured LLM model."""
+"""Observable, minimal real-API access check for every configured LLM model.
+
+PARA HARCAMA KURALI (varsayilan davranis):
+  * UCRETSIZ saglayicilar (Gemini, Groq) — tek, kucuk bir URETIM cagrisi
+    (`smoke_test`). Free tier'da fatura 0.
+  * UCRETLI saglayicilar (config.PAID_PROVIDERS: OpenAI, Claude) — YALNIZCA
+    model METADATA cagrisi (GET /models/{id}). Token uretilmez, fatura 0.
+
+`--paid-generation` bayragi acikca verilmedikce ucretli saglayiciya HICBIR
+uretim cagrisi yapilmaz. Bayrak verilse bile onay istenir.
+
+Cikti hicbir zaman API anahtarini, bakiye veya kota bilgisini yazdirmaz;
+yalnizca saglayici, model, durum ve redakte edilmis hata sinifi basilir.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +27,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+import config
 from error_taxonomy import classify_error
 from generators import GENERATOR_REGISTRY
 from security.redaction import redact_secrets
@@ -35,6 +49,7 @@ class SmokeResult:
     error_class: str = ""
     detail: str = ""
     attempted: bool = False
+    mode: str = ""  # "metadata" (token uretilmedi) | "generation"
 
 
 def _emit(message: str = "") -> None:
@@ -71,35 +86,58 @@ def _select_specs(specs: list[tuple[type, str, str]], only: str | None) -> list[
     return [by_key[item] for item in requested]
 
 
-def _run_model(generator_class: type, model: str, provider: str) -> SmokeResult:
+def _probe_metadata(generator_class: type, model: str, provider: str) -> None:
+    """Modelin erisilebilirligini URETIM YAPMADAN dogrular.
+
+    Yalnizca saglayicinin model metadata ucunu cagirir (GET /models/{id});
+    token uretilmez, dolayisiyla fatura olusmaz.
+    """
+    client = generator_class(model)._get_client()
+    if provider == "Gemini":
+        client.models.get(model=model)          # google-genai
+    else:
+        client.models.retrieve(model)           # openai / anthropic / groq (OpenAI uyumlu)
+
+
+def _run_model(generator_class: type, model: str, provider: str, allow_paid_generation: bool = False) -> SmokeResult:
     env_var = ENV_BY_PROVIDER.get(provider)
     if env_var is None:
         return SmokeResult(provider, model, "FAIL", "CODE_ERROR", "Unknown provider mapping")
     if not os.getenv(env_var):
         return SmokeResult(provider, model, "FAIL", "MISSING_CREDENTIAL", f"{env_var} is not set")
+    metadata_only = provider in config.PAID_PROVIDERS and not allow_paid_generation
     try:
-        rows = generator_class(model).smoke_test()
-        if len(rows) != 1:
-            raise RuntimeError("Provider response parsing error: smoke normalization returned no row.")
+        if metadata_only:
+            _probe_metadata(generator_class, model, provider)
+        else:
+            rows = generator_class(model).smoke_test()
+            if len(rows) != 1:
+                raise RuntimeError("Provider response parsing error: smoke normalization returned no row.")
     except Exception as exc:
-        return SmokeResult(provider, model, "FAIL", _classify_error(exc), _safe_error(exc), attempted=True)
-    return SmokeResult(provider, model, "PASS", attempted=True)
+        return SmokeResult(provider, model, "FAIL", _classify_error(exc), _safe_error(exc),
+                           attempted=True, mode="metadata" if metadata_only else "generation")
+    return SmokeResult(provider, model, "PASS", attempted=True,
+                       mode="metadata" if metadata_only else "generation")
 
 
-def _print_header(specs: list[tuple[type, str, str]], expected: int = EXPECTED_MODELS) -> None:
-    _emit("LLM_TESTLAB REAL API SMOKE TEST")
+def _print_header(specs: list[tuple[type, str, str]], expected: int = EXPECTED_MODELS,
+                  allow_paid_generation: bool = False) -> None:
+    _emit("LLM_TESTLAB REAL API ACCESS CHECK")
     _emit()
     _emit(f"Expected external models: {expected}")
     for _generator_class, model, provider in specs:
-        _emit(f"- {provider} | {model}")
+        paid = provider in config.PAID_PROVIDERS
+        mode = "generation" if (not paid or allow_paid_generation) else "metadata-only (no tokens)"
+        _emit(f"- {provider} | {model} | {'PAID' if paid else 'free'} | {mode}")
     _emit()
 
 
 def _print_result(result: SmokeResult) -> None:
+    mode = f" | {result.mode}" if result.mode else ""
     if result.status == "PASS":
-        _emit(f"[PASS] {result.provider} | {result.model}")
+        _emit(f"[PASS] {result.provider} | {result.model}{mode}")
         return
-    suffix = f" | {result.error_class}"
+    suffix = f"{mode} | {result.error_class}"
     if result.detail:
         suffix += f" | {result.detail}"
     _emit(f"[FAIL] {result.provider} | {result.model}{suffix}")
@@ -126,7 +164,7 @@ def _print_summary(results: list[SmokeResult], expected: int = EXPECTED_MODELS, 
     return successful
 
 
-def main(registry=None, only: str | None = None) -> int:
+def main(registry=None, only: str | None = None, allow_paid_generation: bool = False) -> int:
     load_dotenv(PROJECT_ROOT / ".env")
     all_specs = _model_specs(registry)
     try:
@@ -137,7 +175,7 @@ def main(registry=None, only: str | None = None) -> int:
         return 1
     targeted = bool(only)
     expected = len(specs) if targeted else EXPECTED_MODELS
-    _print_header(specs, expected)
+    _print_header(specs, expected, allow_paid_generation)
     if not targeted and len(specs) != EXPECTED_MODELS:
         _emit(f"[FAIL] Registry | configured models | NO_MODELS_TESTED | expected {EXPECTED_MODELS}, found {len(specs)}")
         _print_summary([], EXPECTED_MODELS)
@@ -145,7 +183,7 @@ def main(registry=None, only: str | None = None) -> int:
     results: list[SmokeResult] = []
     for generator_class, model, provider in specs:
         _emit(f"[RUN] {provider} | {model}")
-        result = _run_model(generator_class, model, provider)
+        result = _run_model(generator_class, model, provider, allow_paid_generation)
         results.append(result)
         _print_result(result)
     return 0 if _print_summary(results, expected, targeted=targeted) else 1
@@ -157,9 +195,15 @@ def _parse_args() -> argparse.Namespace:
         "--only",
         help="Comma-separated provider:model selections; only those exact configured models are called.",
     )
+    parser.add_argument(
+        "--paid-generation",
+        action="store_true",
+        help="UCRETLI saglayicilara da gercek uretim cagrisi yap (PARA HARCAR). "
+             "Verilmezse ucretlilerde yalnizca model metadata cagrilir.",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = _parse_args()
-    raise SystemExit(main(only=args.only))
+    raise SystemExit(main(only=args.only, allow_paid_generation=args.paid_generation))
