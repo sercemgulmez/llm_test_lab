@@ -83,6 +83,7 @@ class CallLedger:
         self._spend_billed = 0.0
         self._spend_list_equivalent = 0.0
         self._unpriced_calls = 0
+        self._spend_guard_estimate = 0.0
         self._seed_spend_from_disk()
 
     def _seed_spend_from_disk(self) -> None:
@@ -98,6 +99,7 @@ class CallLedger:
         self._spend_billed = previous["cost_usd_billed"]
         self._spend_list_equivalent = previous["cost_usd_list_equivalent"]
         self._unpriced_calls = previous["unpriced_calls"]
+        self._spend_guard_estimate = previous["cost_usd_guard_estimate"]
         if self._spend_billed or self._unpriced_calls:
             _logger.info(
                 "  [defter] onceki harcama yuklendi: $%.4f (%d fiyatlanamayan cagri)",
@@ -136,6 +138,7 @@ class CallLedger:
         repeat_index: int = 0,
         latency_ms: int | None = None,
         call_meta: dict | None = None,
+        prompt_chars: int = 0,
     ) -> None:
         if not self.enabled:
             return
@@ -159,7 +162,8 @@ class CallLedger:
             "finish_reason": (call_meta or {}).get("finish_reason"),
             "sampling": _clean((call_meta or {}).get("sampling") or {}),
             **usage.to_dict(),
-            **self._cost_fields(usage, (call_meta or {}).get("model_requested")),
+            **self._cost_fields(usage, (call_meta or {}).get("model_requested"),
+                                call_meta, prompt_chars),
             "accepted_cases": accepted_cases,
             "rejected_cases": rejected_cases,
             "raw_response": raw[:MAX_RAW_RESPONSE_CHARS],
@@ -183,6 +187,7 @@ class CallLedger:
         repeat_index: int = 0,
         latency_ms: int | None = None,
         call_meta: dict | None = None,
+        prompt_chars: int = 0,
     ) -> str:
         """Yanit alinamayan cagriyi (429, kota, timeout, ag) deftere yazar.
 
@@ -191,6 +196,16 @@ class CallLedger:
         error_class = classify_error(exc) if isinstance(exc, Exception) else "UNKNOWN_ERROR"
         if not self.enabled:
             return error_class
+        # Yanit gelmemis olsa bile saglayici istegi isleyip faturalamis OLABILIR.
+        # Sifir varsaymak butceyi kor eder; ust tahmin ayri alanda tutulur.
+        failed_guard = pricing.guard_estimate(
+            (call_meta or {}).get("model_requested") or "",
+            prompt_chars,
+            pricing.max_output_tokens_from_sampling((call_meta or {}).get("sampling")),
+        )
+        with self._spend_lock:
+            self._unpriced_calls += 1
+            self._spend_guard_estimate += failed_guard or 0.0
         self._safe_append({
             "ts": datetime.now().astimezone().isoformat(timespec="seconds"),
             "run_id": self.run_id,
@@ -214,6 +229,7 @@ class CallLedger:
             "cost_usd_list_equivalent": None,
             "cost_basis": "cagri_basarisiz_token_bildirilmedi",
             "pricing_available": False,
+            "cost_usd_guard_estimate": failed_guard,
             "accepted_cases": 0,
             "rejected_cases": 0,
             "raw_response": "",
@@ -262,20 +278,38 @@ class CallLedger:
             "cases": [_case_entry(row) for row in cases],
         })
 
-    def _cost_fields(self, usage: TokenUsage, model: str | None) -> dict:
+    def _cost_fields(
+        self,
+        usage: TokenUsage,
+        model: str | None,
+        call_meta: dict | None = None,
+        prompt_chars: int = 0,
+    ) -> dict:
         """Cagri basina maliyet alanlari; ayni anda canli toplami da gunceller.
 
-        Fiyat tablosu bos oldugu surece tutarlar None kalir ve cagri
-        `unpriced_calls` icinde sayilir — maliyet ASLA tahmin edilmez.
+        Gercek tutar hesaplanamiyorsa (token ayrimi yok, fiyat yok) maliyet
+        UYDURULMAZ: cost_usd_billed None kalir. Bunun yerine AYRI bir alanda
+        muhafazakar ust tahmin (cost_usd_guard_estimate) tutulur; butce sigortasi
+        bunu kullanir, fatura tahmini onu KULLANMAZ.
         """
         cost = pricing.cost_for(model or "", usage)
+        fields = cost.to_dict()
+        guard = None
+        if not cost.pricing_available:
+            guard = pricing.guard_estimate(
+                model or "",
+                prompt_chars,
+                pricing.max_output_tokens_from_sampling((call_meta or {}).get("sampling")),
+            )
+        fields["cost_usd_guard_estimate"] = guard
         with self._spend_lock:
             if cost.pricing_available:
                 self._spend_billed += cost.cost_usd_billed or 0.0
                 self._spend_list_equivalent += cost.cost_usd_list_equivalent or 0.0
             else:
                 self._unpriced_calls += 1
-        return cost.to_dict()
+                self._spend_guard_estimate += guard or 0.0
+        return fields
 
     def spend_so_far(self) -> dict:
         """Kosu ICINDEKI canli harcama — butce esikleri bunu kullanir (K6).
@@ -288,6 +322,7 @@ class CallLedger:
             return {
                 "cost_usd_billed": round(self._spend_billed, 6),
                 "cost_usd_list_equivalent": round(self._spend_list_equivalent, 6),
+                "cost_usd_guard_estimate": round(self._spend_guard_estimate, 6),
                 "unpriced_calls": self._unpriced_calls,
                 "pricing_available": pricing.price_table_ready(),
             }
@@ -360,6 +395,7 @@ def total_spend(records: list[dict]) -> dict:
     """
     billed = 0.0
     list_equivalent = 0.0
+    guard = 0.0
     priced = 0
     unpriced = 0
     reasons: dict[str, int] = {}
@@ -372,11 +408,13 @@ def total_spend(records: list[dict]) -> dict:
             priced += 1
         else:
             unpriced += 1
+            guard += float(record.get("cost_usd_guard_estimate") or 0.0)
             basis = str(record.get("cost_basis") or "bilinmiyor")
             reasons[basis] = reasons.get(basis, 0) + 1
     return {
         "cost_usd_billed": round(billed, 6),
         "cost_usd_list_equivalent": round(list_equivalent, 6),
+        "cost_usd_guard_estimate": round(guard, 6),
         "priced_calls": priced,
         "unpriced_calls": unpriced,
         "unpriced_reasons": reasons,

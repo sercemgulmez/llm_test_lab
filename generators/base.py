@@ -713,6 +713,7 @@ class BaseGenerator(ABC):
                         repeat_index=repeat_index,
                         latency_ms=int((time.perf_counter() - started_at) * 1000),
                         call_meta=getattr(self, "_last_call_meta", None),
+                        prompt_chars=len(prompt),
                     )
                     if failure_origin(error_class) == "altyapi":
                         had_infrastructure_failure = True
@@ -759,6 +760,7 @@ class BaseGenerator(ABC):
                     raw_response=text,
                     cases=accepted_rows,
                     validation_errors=invalid_rows,
+                    prompt_chars=len(prompt),
                 )
 
             previously_accepted = llm_valid_count

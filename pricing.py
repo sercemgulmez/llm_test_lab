@@ -164,3 +164,47 @@ def cost_for(model: str, usage: TokenUsage) -> CallCost:
     if price.billed:
         return CallCost(list_equivalent, list_equivalent, BASIS_BILLED, True)
     return CallCost(0.0, list_equivalent, BASIS_FREE_TIER, True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Muhafazakar UST TAHMIN (guard estimate)
+#
+# Fiyatlanamayan cagrilar (saglayici token bildirmedi, yanit hic gelmedi) icin
+# "sifir harcandi" varsaymak butce sigortasini kor eder. Bunun yerine olabilecek
+# EN YUKSEK tutar tahmin edilir ve AYRI bir alanda tutulur.
+#
+# Bu tutar bir FATURA TAHMINI DEGILDIR ve cost_usd_billed ile TOPLANMAZ; yalnizca
+# butce esiklerinin muhafazakar tarafta kalmasi icin kullanilir.
+# ─────────────────────────────────────────────────────────────────────────────
+CHARS_PER_TOKEN = 4.0      # Anthropic'in belgeledigi yaklasik oran (1 token ~ 4 karakter)
+INPUT_SAFETY_FACTOR = 1.5  # tokenizer 4:1'den kotu olabilir; ust tahmin sisirilir
+
+_MAX_TOKEN_KEYS = ("max_tokens", "max_completion_tokens", "max_output_tokens")
+
+
+def max_output_tokens_from_sampling(sampling: dict | None) -> int:
+    """Saglayicilarin farkli isimlendirdigi cikti tavanini bulur."""
+    for key in _MAX_TOKEN_KEYS:
+        value = (sampling or {}).get(key)
+        if isinstance(value, int) and value > 0:
+            return value
+    return 0
+
+
+def guard_estimate(model: str, prompt_chars: int, max_output_tokens: int) -> float | None:
+    """Bir cagrinin olabilecek EN YUKSEK maliyeti. Bilinmiyorsa None.
+
+    Girdi: prompt karakter sayisindan tahmin, guvenlik katsayisiyla buyutulur.
+    Cikti: modelin uretebilecegi TAVAN (max_tokens), gercek uretim degil.
+    """
+    price = PRICE_TABLE.get(model or "")
+    if price is None:
+        return None
+    if not price.billed:
+        return 0.0  # free tier: fatura yok, butce riski yok
+    input_tokens = (max(0, int(prompt_chars)) / CHARS_PER_TOKEN) * INPUT_SAFETY_FACTOR
+    total = (
+        input_tokens * price.input_usd_per_mtok
+        + max(0, int(max_output_tokens)) * price.output_usd_per_mtok
+    ) / 1_000_000.0
+    return round(total, 8)

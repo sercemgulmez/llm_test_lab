@@ -581,6 +581,47 @@ def _paid_retry_cost_note(call_ledger, paid_task_keys: list, extra_calls: int) -
     )
 
 
+EXIT_FAIL_CLOSED = 3
+
+
+class _FailClosed(RuntimeError):
+    """Ucretli kosu on kosullari saglanmadi; kosu baslatilmaz."""
+
+
+def _fail_closed_check(llm_generators: list, budget_guard) -> list:
+    """UCRETLI generator'lar icin FAIL-CLOSED on kontrol.
+
+    Para harcayan bir generator, harcamasi OLCULEMEYECEK durumdayken
+    kosmamalidir. Iki kosul da engelleyicidir:
+      (a) modelin pricing.PRICE_TABLE'da girdisi yok  -> maliyet hesaplanamaz,
+      (b) butce sigortasi armed=False                 -> esikler tetiklenmez.
+    Ucretsiz generator'lar bu kontrolden etkilenmez.
+
+    Doner: engelleyici sebeplerin listesi (bos ise kosulabilir).
+    """
+    blockers: list[str] = []
+    paid_models = sorted({
+        getattr(gen, "model", "")
+        for gen, _v, _d in llm_generators
+        if type(gen).__name__.removesuffix("Generator") in config.PAID_PROVIDERS
+    })
+    if not paid_models:
+        return blockers
+
+    missing = [model for model in paid_models if model not in pricing.PRICE_TABLE]
+    if missing:
+        blockers.append(
+            f"fiyat tablosunda girdisi olmayan UCRETLI model(ler): {', '.join(missing)}"
+        )
+    if not budget_guard.armed:
+        blockers.append(
+            "butce sigortasi ATIL (armed=False): $%.0f/$%.0f/$%.0f esikleri tetiklenmez"
+            % (config.BUDGET_THRESHOLDS["warn"], config.BUDGET_THRESHOLDS["hard_warn"],
+               config.BUDGET_THRESHOLDS["stop"])
+        )
+    return blockers
+
+
 def _mixed_origin_tasks(task_records: dict) -> list:
     """Hem altyapi hem icerik kaynakli basarisizlik iceren gorevler.
 
@@ -887,6 +928,18 @@ def main() -> None:
         # LLM tabanlı generator'lar — dış döngü paralelliği (generator başına bir thread)
         prompt_variant_filter = getattr(args, "prompt_variant", "both")
         llm_generators = _build_llm_generators(selected_keys, prompt_variant_filter)
+
+        # FAIL-CLOSED: olculemeyen harcama yapilmaz. Kontrol uretim baslamadan
+        # once, yani tek kurus harcanmadan once yapilir.
+        fail_closed = _fail_closed_check(llm_generators, budget_guard)
+        if fail_closed:
+            for reason in fail_closed:
+                _logger.error("  [FAIL-CLOSED] %s", reason)
+            _logger.error(
+                "  UCRETLI generator'lar KOSULMADI. Duzeltip tekrar deneyin, ya da "
+                "--generators ile yalnizca ucretsiz saglayicilari secin."
+            )
+            raise _FailClosed("; ".join(fail_closed))
         with ThreadPoolExecutor(max_workers=config.MAX_PARALLEL_GENERATORS) as executor:
             future_to_task = {}
             for gen_instance, v_name, v_desc in llm_generators:
@@ -1047,6 +1100,15 @@ def main() -> None:
             "yukaridaki BASARISIZ GENERATOR OZETI bolumune bakin.",
             len(failed_generations), total_lost,
         )
+
+    if isinstance(run_failure, _FailClosed):
+        # Ucretli on kosullar saglanmadi: ucretsiz/sablon satirlar yazildi ama
+        # kosu BASARISIZ sayilir ve ayri bir cikis koduyla biter.
+        _logger.error(
+            "\nKOSU FAIL-CLOSED ile durduruldu (%s). %d satir diske yazildi: %s/",
+            run_failure, len(executed_rows), args.output_dir,
+        )
+        sys.exit(EXIT_FAIL_CLOSED)
 
     if run_failure is not None:
         _logger.error(
