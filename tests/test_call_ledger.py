@@ -217,3 +217,123 @@ def test_ledger_totals_match_produced_rows_not_cumulative_counts(tmp_path):
     assert summary["accepted_cases"] == 1, "model tek gecerli case dondu"
     assert summary["fallback_cases"] == 4
     assert summary["fallback_share"] == 0.8
+
+
+# ── B3 eki: dayaniklilik, basarisiz cagrilar, meta ────────────────────────
+
+def test_ledger_write_failure_does_not_stop_the_run(tmp_path, caplog):
+    """Defter yazilamazsa satirlar korunmali, kosu DURMAMALI."""
+    import logging
+
+    led = _ledger(tmp_path)
+
+    def _explode(record):
+        raise OSError("disk dolu")
+
+    led._log.append = _explode
+
+    with caplog.at_level(logging.ERROR):
+        led.record_call(
+            generator="G", variant="basic", operation_id="EP1", method="GET", path="/get",
+            attempt=0, call_type="ana", usage=TokenUsage(total_tokens=5),
+            accepted_cases=1, rejected_cases=0, raw_response="[]", cases=[],
+        )
+
+    assert len(led.write_errors) == 1
+    assert "disk dolu" in led.write_errors[0]
+    assert any("KAYIT YAZILAMADI" in r.getMessage() for r in caplog.records)
+
+
+def test_failed_call_is_recorded_with_error_class_and_origin(tmp_path):
+    class _RateLimited(RuntimeError):
+        status_code = 429
+
+    led = _ledger(tmp_path)
+    error_class = led.record_failed_call(
+        generator="LLM-X", variant="basic", operation_id="EP1", method="GET", path="/get",
+        attempt=0, call_type="ana", exc=_RateLimited("rate limit exceeded"), latency_ms=1200,
+    )
+    led.flush()
+
+    record = json.loads(led.path.read_text(encoding="utf-8").strip())
+    assert error_class == "RATE_LIMIT"
+    assert record["failed"] is True
+    assert record["error_class"] == "RATE_LIMIT"
+    assert record["failure_origin"] == "altyapi"
+    assert record["latency_ms"] == 1200
+    assert record["total_tokens"] == 0
+
+
+def test_content_failure_is_marked_as_icerik_not_altyapi(tmp_path):
+    from generators.base import ModelOutputFormatError
+
+    led = _ledger(tmp_path)
+    error_class = led.record_failed_call(
+        generator="LLM-X", variant="basic", operation_id="EP1", method="GET", path="/get",
+        attempt=1, call_type="repair", exc=ModelOutputFormatError("Model output format error"),
+    )
+    led.flush()
+
+    record = json.loads(led.path.read_text(encoding="utf-8").strip())
+    assert error_class == "MODEL_OUTPUT_FORMAT_ERROR"
+    assert record["failure_origin"] == "icerik"
+
+
+def test_repeat_index_latency_and_model_identity_are_recorded(tmp_path):
+    led = _ledger(tmp_path)
+    led.record_call(
+        generator="LLM-X", variant="basic", operation_id="EP1", method="GET", path="/get",
+        attempt=0, call_type="ana", usage=TokenUsage(total_tokens=10),
+        accepted_cases=1, rejected_cases=0, raw_response="[]", cases=[],
+        repeat_index=2, latency_ms=850,
+        call_meta={
+            "model_requested": "gpt-4.1",
+            "model_returned": "gpt-4.1-2025-04-14",
+            "response_id": "resp_123",
+            "finish_reason": "stop",
+            "sampling": {"max_completion_tokens": 4096},
+        },
+    )
+    led.flush()
+
+    record = json.loads(led.path.read_text(encoding="utf-8").strip())
+    assert record["repeat_index"] == 2
+    assert record["latency_ms"] == 850
+    assert record["model_requested"] == "gpt-4.1"
+    assert record["model_returned"] == "gpt-4.1-2025-04-14", "API yanitindaki surum kaydedilmeli"
+    assert record["sampling"] == {"max_completion_tokens": 4096}
+    assert record["ts"]
+
+
+def test_repeat_index_defaults_to_zero(tmp_path):
+    led = _ledger(tmp_path)
+    led.record_call(
+        generator="G", variant="basic", operation_id="EP1", method="GET", path="/get",
+        attempt=0, call_type="ana", usage=TokenUsage(total_tokens=1),
+        accepted_cases=0, rejected_cases=0, raw_response="[]", cases=[],
+    )
+    led.flush()
+    assert json.loads(led.path.read_text(encoding="utf-8").strip())["repeat_index"] == 0
+
+
+def test_resume_appends_to_existing_ledger_instead_of_overwriting(tmp_path):
+    """Ayni run_id ile yeniden acilan defter mevcut kayitlarin USTUNE YAZMAMALI."""
+    first = CallLedger(str(tmp_path), run_id="run_resume")
+    first.record_call(
+        generator="G", variant="basic", operation_id="EP1", method="GET", path="/get",
+        attempt=0, call_type="ana", usage=TokenUsage(total_tokens=1),
+        accepted_cases=1, rejected_cases=0, raw_response="ilk", cases=[],
+    )
+    first.flush()
+
+    second = CallLedger(str(tmp_path), run_id="run_resume")   # resume
+    second.record_call(
+        generator="G", variant="basic", operation_id="EP2", method="GET", path="/get",
+        attempt=0, call_type="ana", usage=TokenUsage(total_tokens=1),
+        accepted_cases=1, rejected_cases=0, raw_response="ikinci", cases=[],
+    )
+    second.flush()
+
+    records = CallLedger.load(second.path)
+    assert len(records) == 2, "resume mevcut deftere EKLEMELI"
+    assert [r["operation_id"] for r in records] == ["EP1", "EP2"]

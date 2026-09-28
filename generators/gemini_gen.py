@@ -63,6 +63,13 @@ class GeminiGenerator(BaseGenerator):
             contents=prompt,
             config=generation_config,
         )
+        self._last_call_meta = {
+            "model_requested": self.model,
+            "model_returned": getattr(resp, "model_version", None),
+            "response_id": getattr(resp, "response_id", None),
+            "finish_reason": getattr((getattr(resp, "candidates", None) or [None])[0], "finish_reason", None),
+            "sampling": dict(generation_config),
+        }
         try:
             text = getattr(resp, "text", None)
         except Exception as exc:

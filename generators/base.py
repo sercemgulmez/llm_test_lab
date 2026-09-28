@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from config import MAX_PARALLEL_WORKERS, RETRY_BACKOFF_SECONDS, RETRY_MAX_ATTEMPTS
+from error_taxonomy import failure_origin
 from models import ApiOperation, TestCase, TokenUsage
 from security.redaction import redact_secrets
 
@@ -657,9 +658,41 @@ class BaseGenerator(ABC):
         retry_index = getattr(self, "_retry_index", 1)
         previously_accepted = 0  # defterde kumulatif degil ARTIMSAL sayi tutulur
 
+        repeat_index = getattr(self, "_repeat_index", 0)
+        had_infrastructure_failure = False
+
         prompt = build_llm_prompt(op, num_cases, variant_name, variant_desc)
         for attempt in range(3):
-            text, used_tokens = request_completion(prompt)
+            if attempt > 0:
+                call_type_for_log = "repair"
+            elif retry_index > 1:
+                call_type_for_log = "retry"
+            else:
+                call_type_for_log = "ana"
+
+            started_at = time.perf_counter()
+            try:
+                text, used_tokens = request_completion(prompt)
+            except Exception as exc:
+                # Yanit alinamadi: defter bunu KAYBETMEMELI, sonra geri getirilemez.
+                if ledger is not None:
+                    error_class = ledger.record_failed_call(
+                        generator=generator_name,
+                        variant=variant_name,
+                        operation_id=op.op_id,
+                        method=op.method,
+                        path=op.path,
+                        attempt=attempt,
+                        call_type=call_type_for_log,
+                        exc=exc,
+                        repeat_index=repeat_index,
+                        latency_ms=int((time.perf_counter() - started_at) * 1000),
+                        call_meta=getattr(self, "_last_call_meta", None),
+                    )
+                    if failure_origin(error_class) == "altyapi":
+                        had_infrastructure_failure = True
+                raise
+            latency_ms = int((time.perf_counter() - started_at) * 1000)
             usage = TokenUsage.coerce(used_tokens)
             call_usages.append(usage)
             parsed_rows = parse_llm_json_to_rows(text, op, generator_name)
@@ -684,12 +717,6 @@ class BaseGenerator(ABC):
                     validation_error_summary[error] = validation_error_summary.get(error, 0) + 1
 
             if ledger is not None:
-                if attempt > 0:
-                    call_type = "repair"
-                elif retry_index > 1:
-                    call_type = "retry"
-                else:
-                    call_type = "ana"
                 ledger.record_call(
                     generator=generator_name,
                     variant=variant_name,
@@ -697,8 +724,11 @@ class BaseGenerator(ABC):
                     method=op.method,
                     path=op.path,
                     attempt=attempt,
-                    call_type=call_type,
+                    call_type=call_type_for_log,
                     usage=usage,
+                    repeat_index=repeat_index,
+                    latency_ms=latency_ms,
+                    call_meta=getattr(self, "_last_call_meta", None),
                     accepted_cases=max(0, llm_valid_count - previously_accepted),
                     rejected_cases=len(invalid_rows),
                     raw_response=text,
@@ -737,6 +767,12 @@ class BaseGenerator(ABC):
             )
             accepted_rows.extend(fallback_rows)
             if ledger is not None and fallback_rows:
+                origin = "altyapi" if had_infrastructure_failure else "icerik"
+                reason = (
+                    "Saglayici cagrisi basarisiz oldu (altyapi)"
+                    if had_infrastructure_failure
+                    else "LLM yeterli gecerli case uretemedi (icerik)"
+                )
                 ledger.record_fallback(
                     generator=generator_name,
                     variant=variant_name,
@@ -744,6 +780,8 @@ class BaseGenerator(ABC):
                     method=op.method,
                     path=op.path,
                     cases=fallback_rows,
+                    reason=reason,
+                    origin=origin,
                 )
 
         final_rows = accepted_rows[:num_cases]
