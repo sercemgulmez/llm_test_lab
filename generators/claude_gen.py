@@ -52,6 +52,10 @@ class ClaudeGenerator(BaseGenerator):
             raise ProviderResponseParseError(
                 f"Provider response parse error: content_blocks={len(content)}; first_block_type={type(content[0]).__name__}"
             )
+        # Anthropic usage'inda ayri bir "thinking token" alani YOKTUR ve bu kosuda
+        # extended thinking istenmiyor; dusunme token'i uretilse bile output_tokens
+        # icinde gelir ve cikti fiyatindan faturalanir. Bu yuzden reasoning_tokens
+        # bos birakilir — sahte bir ayristirma yapilmaz.
         usage = getattr(message, "usage", None)
         if usage is None:
             return text, TokenUsage()

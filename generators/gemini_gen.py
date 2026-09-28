@@ -82,6 +82,11 @@ class GeminiGenerator(BaseGenerator):
         prompt_tokens = getattr(usage, "prompt_token_count", None)
         output_tokens = getattr(usage, "candidates_token_count", None)
         total = getattr(usage, "total_token_count", 0) or 0
+        # Gemini'de dusunme token'lari AYRI alandadir: candidates_token_count'un
+        # ICINDE DEGILDIR ama cikti fiyatindan faturalanir (fiyat sayfasi:
+        # "Output price (including thinking tokens)"). Bu yuzden ayri kaydedilir
+        # ve faturalanabilir cikti = candidates + thoughts olarak hesaplanir.
+        thoughts = getattr(usage, "thoughts_token_count", None) if usage is not None else None
         if prompt_tokens is None or output_tokens is None:
             return text, TokenUsage(total_tokens=total, split_available=False)
         return text, TokenUsage(
@@ -89,6 +94,8 @@ class GeminiGenerator(BaseGenerator):
             output_tokens=int(output_tokens or 0),
             total_tokens=total,
             split_available=True,
+            reasoning_tokens=int(thoughts or 0),
+            reasoning_included_in_output=False,
         )
 
     def _generate_for_operation(

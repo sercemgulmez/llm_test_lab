@@ -37,7 +37,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from call_ledger import CallLedger, summarize_by_generator
+from call_ledger import CallLedger, summarize_by_generator, total_spend
 
 # Bos olmamasi gereken kolonlar. actual_status / pass yalnizca --executed ile zorunlu.
 CRITICAL_COLUMNS = ("generator", "operation_id", "http_method", "path", "tc_id", "title")
@@ -210,7 +210,12 @@ def check_generator_balance(
             )
 
 
-def check_tokens(rows: list[dict], fieldnames: list[str], findings: Findings) -> None:
+def check_tokens(
+    rows: list[dict],
+    fieldnames: list[str],
+    findings: Findings,
+    ledger_records: list[dict] | None = None,
+) -> None:
     if "tokens_used" not in fieldnames:
         findings.add("UYARI", "tokens_used kolonu yok; token tutarliligi denetlenemedi.")
         return
@@ -231,44 +236,104 @@ def check_tokens(rows: list[dict], fieldnames: list[str], findings: Findings) ->
     total_tokens = sum(sum(values) for values in by_generator.values())
     findings.add("BILGI", f"tokens_used toplami (satir bazinda): {total_tokens}")
 
-    # base.py::_apply_token_tracking her satira operasyonun TOPLAM tokenini yazar.
-    # Bu durumda ayni (generator, operation_id) grubunda tum degerler ayni olur ve
-    # satirlari toplamak gercek token sayisini ~num_cases kati sisirir.
-    suspicious: list[str] = []
-    grouped: dict[tuple[str, str], set[int]] = defaultdict(set)
+    # ── K4: satir toplami gercek tuketimi vermeli ────────────────────────────
+    # Eski hata: _apply_token_tracking operasyonun TOPLAM tokenini her satira
+    # kopyaliyordu, dolayisiyla satirlari toplamak sayiyi ~num_cases kati
+    # sisiriyordu. Duzeltmeden sonra toplam satirlara PAYLASTIRILIR.
+    #
+    # DIKKAT: "gruptaki tum degerler ayni" sezgisi artik tek basina kanit DEGIL
+    # — toplam satir sayisina tam bolundugunde paylastirma da ayni degeri uretir.
+    # Bu yuzden asil olcut, defterdeki gercek token toplamiyla karsilastirmadir.
+    csv_by_op: dict[tuple[str, str], int] = defaultdict(int)
+    csv_rows_by_op: dict[tuple[str, str], int] = defaultdict(int)
     for row in rows:
         value = _to_int(row.get("tokens_used"))
-        if value is None or value == 0:
+        key = (str(row.get("generator", "")), str(row.get("operation_id", "")))
+        csv_rows_by_op[key] += 1
+        if value:
+            csv_by_op[key] += value
+
+    ledger_by_op: dict[tuple[str, str], int] = defaultdict(int)
+    for record in ledger_records or []:
+        if record.get("call_type") == "fallback":
             continue
-        grouped[(str(row.get("generator", "")), str(row.get("operation_id", "")))].add(value)
-    for (generator, operation_id), values in grouped.items():
-        group_size = sum(
-            1
+        key = (str(record.get("generator", "")), str(record.get("operation_id", "")))
+        ledger_by_op[key] += _to_int(record.get("total_tokens")) or 0
+
+    if ledger_by_op:
+        mismatches: list[str] = []
+        for key, ledger_total in sorted(ledger_by_op.items()):
+            if not ledger_total:
+                continue
+            csv_total = csv_by_op.get(key, 0)
+            if csv_total != ledger_total:
+                ratio = (csv_total / ledger_total) if ledger_total else 0
+                mismatches.append(
+                    f"{key[0]}/{key[1]}: CSV {csv_total} != defter {ledger_total} ({ratio:.2f}x)"
+                )
+        if mismatches:
+            preview = "; ".join(mismatches[:3])
+            suffix = " ..." if len(mismatches) > 3 else ""
+            findings.add(
+                "KRITIK",
+                f"{len(mismatches)} (generator, operation_id) grubunda CSV satirlarinin "
+                f"tokens_used toplami defterdeki gercek token sayisina esit degil "
+                f"(K4 deseni): {preview}{suffix}",
+            )
+        else:
+            findings.add(
+                "BILGI",
+                f"K4 kontrolu: {len(ledger_by_op)} grupta CSV satir toplami defterle BIREBIR tutuyor.",
+            )
+        return
+
+    # Defter yoksa yalnizca zayif sezgi kalir; KRITIK denmez cunku ayirt edemez.
+    identical: list[str] = []
+    for key, row_count in csv_rows_by_op.items():
+        values = {
+            _to_int(row.get("tokens_used"))
             for row in rows
-            if str(row.get("generator", "")) == generator
-            and str(row.get("operation_id", "")) == operation_id
-        )
-        if group_size > 1 and len(values) == 1:
-            suspicious.append(f"{generator}/{operation_id} ({group_size} satir, tek deger {values.pop()})")
-
-    if suspicious:
-        preview = "; ".join(suspicious[:3])
-        suffix = " ..." if len(suspicious) > 3 else ""
+            if (str(row.get("generator", "")), str(row.get("operation_id", ""))) == key
+        }
+        values.discard(None)
+        values.discard(0)
+        if row_count > 1 and len(values) == 1:
+            identical.append(f"{key[0]}/{key[1]} ({row_count} satir, tek deger {values.pop()})")
+    if identical:
+        preview = "; ".join(identical[:3])
+        suffix = " ..." if len(identical) > 3 else ""
         findings.add(
-            "KRITIK",
-            f"{len(suspicious)} (generator, operation_id) grubunda tum satirlar AYNI tokens_used "
-            f"degerini tasiyor. Bu, operasyon toplaminin her satira kopyalandigini gosterir; "
-            f"satirlari toplamak token/maliyet sayisini sisirir: {preview}{suffix}",
+            "UYARI",
+            f"Cagri defteri yok; K4 desenini KESIN olarak denetleyemedim. "
+            f"{len(identical)} grupta tum satirlar ayni tokens_used degerini tasiyor — "
+            f"bu, toplamin kopyalanmasindan da tam bolunen bir paylastirmadan da "
+            f"kaynaklanabilir: {preview}{suffix}",
         )
 
 
-def check_cost(rows: list[dict], fieldnames: list[str], findings: Findings) -> None:
+def check_cost(
+    rows: list[dict],
+    fieldnames: list[str],
+    findings: Findings,
+    ledger_records: list[dict] | None = None,
+) -> None:
     cost_columns = [name for name in fieldnames if "cost" in name.lower()]
     if not cost_columns:
+        if ledger_records:
+            # B4(a) karari: maliyetin TEK kaynagi cagri defteridir. CSV yalnizca
+            # hayatta kalan satirlari icerir; iptal edilen nesillerin ve yanit
+            # alinamayan cagrilarin parasi orada gorunmez. Bu yuzden CSV'de
+            # maliyet kolonu olmamasi bir eksiklik DEGIL, tasarim karari.
+            findings.add(
+                "BILGI",
+                "CSV'de maliyet kolonu yok; maliyet tasarim geregi cagri defterinde "
+                "tutuluyor (yukaridaki 'Defter harcamasi' satirina bakin).",
+            )
+            return
         findings.add(
             "KRITIK",
-            "CSV'de maliyet kolonu (cost_usd) YOK. Harcama, uretilen veriden dogrulanamaz; "
-            "saglayici faturasi ile karsilastirma yapilamaz.",
+            "Ne CSV'de maliyet kolonu ne de cagri defteri var. Harcama, uretilen "
+            "veriden dogrulanamaz; saglayici faturasi ile karsilastirma yapilamaz.",
         )
         return
 
@@ -292,21 +357,26 @@ def check_cost(rows: list[dict], fieldnames: list[str], findings: Findings) -> N
                 findings.add("BILGI", f"  {generator}: {total:.6f}")
 
 
-def check_call_ledger(output_dir: str, fallback_threshold: float | None, findings: Findings) -> None:
-    """Cagri defterinden generator basina fallback payi ve kabul orani."""
+def check_call_ledger(
+    output_dir: str, fallback_threshold: float | None, findings: Findings
+) -> list[dict]:
+    """Cagri defterinden fallback payi, kabul orani ve TOPLAM HARCAMA.
+
+    Doner: defter kayitlari (token tutarlilik kontrolu de bunlari kullanir).
+    """
     path = CallLedger.latest_path(output_dir)
     if path is None:
         findings.add(
             "UYARI",
-            "Cagri defteri bulunamadi; fallback payi ve kabul orani DOGRULANAMADI "
-            "(kosu --no-call-ledger ile mi calisti?).",
+            "Cagri defteri bulunamadi; fallback payi, kabul orani ve TOPLAM HARCAMA "
+            "DOGRULANAMADI (kosu --no-call-ledger ile mi calisti?).",
         )
-        return
+        return []
 
     records = CallLedger.load(path)
     if not records:
         findings.add("UYARI", f"Cagri defteri bos: {path}")
-        return
+        return []
 
     findings.add("BILGI", f"Cagri defteri: {path} ({len(records)} kayit)")
     summary = summarize_by_generator(records)
@@ -346,6 +416,24 @@ def check_call_ledger(output_dir: str, fallback_threshold: float | None, finding
                 f"esik {fallback_threshold:.1%} asildi — satirlarin buyuk kismi "
                 f"LLM degil sablon uretimi.",
             )
+
+    # ── Toplam harcama: kaynak DEFTER, CSV degil (B4(a)) ─────────────────────
+    spend = total_spend(records)
+    findings.add(
+        "BILGI",
+        f"Defter harcamasi: faturalanan ${spend['cost_usd_billed']:.4f} · "
+        f"liste-esdeger ${spend['cost_usd_list_equivalent']:.4f} "
+        f"({spend['priced_calls']} fiyatlanan, {spend['unpriced_calls']} fiyatlanamayan cagri)",
+    )
+    if not spend["complete"]:
+        reasons = ", ".join(f"{key}={value}" for key, value in sorted(spend["unpriced_reasons"].items()))
+        findings.add(
+            "UYARI",
+            f"Defter harcamasi EKSIK: {spend['unpriced_calls']} cagri fiyatlandirilamadi "
+            f"({reasons}). Toplam alt sinirdir, gercek harcama daha yuksek olabilir.",
+        )
+
+    return records
 
 
 def check_status_sanity(rows: list[dict], fieldnames: list[str], executed: bool, findings: Findings) -> None:
@@ -441,9 +529,9 @@ def main(argv: list[str] | None = None) -> int:
     check_generator_balance(
         rows, args.expected_generators, args.expected_per_generator, args.tolerance, findings
     )
-    check_call_ledger(args.output_dir, args.fallback_threshold, findings)
-    check_tokens(rows, fieldnames, findings)
-    check_cost(rows, fieldnames, findings)
+    ledger_records = check_call_ledger(args.output_dir, args.fallback_threshold, findings)
+    check_tokens(rows, fieldnames, findings, ledger_records)
+    check_cost(rows, fieldnames, findings, ledger_records)
     check_status_sanity(rows, fieldnames, args.executed, findings)
 
     for label, items in (("KRITIK", findings.critical), ("UYARI", findings.warnings), ("BILGI", findings.info)):

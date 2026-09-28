@@ -12,16 +12,34 @@ class TokenUsage:
     `split_available=False` ise saglayici girdi/cikti ayrimini vermemistir ve
     yalnizca toplam bilinir. Bu durumda AYRISTIRMA UYDURULMAZ; maliyet hesabi
     bu cagriyi "ayristirilamiyor" olarak isaretler.
+
+    `reasoning_tokens`: saglayicinin AYRI raporladigi dusunme/akil yurutme
+    token'lari (Gemini `thoughts_token_count`, OpenAI uyumlu API'lerde
+    `completion_tokens_details.reasoning_tokens`). Her iki saglayici da bunlari
+    CIKTI fiyatindan faturalandirir; fark, sayinin `output_tokens`in ICINDE
+    olup olmadigidir:
+      * OpenAI/Groq: reasoning, completion_tokens'in ICINDEDIR  -> included=True
+      * Gemini:      thoughts, candidates_token_count'un DISINDADIR -> included=False
+    Bu yuzden faturalanabilir cikti `billable_output_tokens` ile hesaplanir.
     """
 
     input_tokens: int = 0
     output_tokens: int = 0
     total_tokens: int = 0
     split_available: bool = False
+    reasoning_tokens: int = 0
+    reasoning_included_in_output: bool = True
 
     def __post_init__(self) -> None:
         if not self.total_tokens:
             self.total_tokens = (self.input_tokens or 0) + (self.output_tokens or 0)
+
+    @property
+    def billable_output_tokens(self) -> int:
+        """Cikti fiyatindan faturalanacak token sayisi."""
+        if self.reasoning_included_in_output:
+            return self.output_tokens or 0
+        return (self.output_tokens or 0) + (self.reasoning_tokens or 0)
 
     @classmethod
     def coerce(cls, value: Any) -> "TokenUsage":
@@ -39,6 +57,9 @@ class TokenUsage:
             "output_tokens": self.output_tokens,
             "total_tokens": self.total_tokens,
             "split_available": self.split_available,
+            "reasoning_tokens": self.reasoning_tokens,
+            "reasoning_included_in_output": self.reasoning_included_in_output,
+            "billable_output_tokens": self.billable_output_tokens,
         }
 
 

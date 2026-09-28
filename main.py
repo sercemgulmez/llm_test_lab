@@ -19,6 +19,9 @@ from pathlib import Path
 import sys
 import time
 
+# pricing ortam degiskenine bagli degil; load_dotenv oncesinde guvenle import edilir.
+import pricing
+
 from dotenv import load_dotenv
 
 # Load project-local secrets without overriding explicitly exported variables.
@@ -549,6 +552,34 @@ def _infra_fallback_candidates(task_records: dict) -> list:
     return candidates
 
 
+def _paid_retry_cost_note(call_ledger, paid_task_keys: list, extra_calls: int) -> str:
+    """Yeniden kosunun DOLAR tahmini (B4(f)).
+
+    Tahmin, onceki kosunun DEFTERINDEKI olculmus ortalama cagri maliyetinden
+    turetilir — uydurma bir birim fiyattan degil. Fiyat tablosu onaylanmadiysa
+    ya da defterde fiyatlanmis cagri yoksa bunu acikca soyler.
+    """
+    if not pricing.price_table_ready():
+        return "(Dolar tahmini YOK: fiyat tablosu henuz onaylanmadi.)"
+    try:
+        records = CallLedger.load(call_ledger.path)
+    except Exception:  # noqa: BLE001 - tahmin yoklugu kosuyu bozmamali
+        records = []
+    costs = [
+        float(r.get("cost_usd_billed") or 0.0)
+        for r in records
+        if r.get("pricing_available") and r.get("call_type") != "fallback"
+    ]
+    if not costs:
+        return "(Dolar tahmini YOK: defterde fiyatlanmis cagri bulunamadi.)"
+    mean = sum(costs) / len(costs)
+    return (
+        f"Tahmini ek maliyet: {extra_calls} cagri x ~${mean:.4f} (onceki kosunun "
+        f"{len(costs)} cagrisindan olculen ortalama) = ~${extra_calls * mean:.2f}. "
+        f"Repair cagrilari bu tahminin DISINDADIR; gercek tutar daha yuksek olabilir."
+    )
+
+
 def _mixed_origin_tasks(task_records: dict) -> list:
     """Hem altyapi hem icerik kaynakli basarisizlik iceren gorevler.
 
@@ -796,12 +827,14 @@ def main() -> None:
                     record.get("fallback_cases"),
                 )
             if paid and not getattr(args, "confirm_paid_retry", False):
+                extra_calls = len(paid) * len(operations)
                 _logger.error(
                     "\n  UCRETLI yeniden kosu ONAY BEKLIYOR: %d gorev PARA HARCAR.\n"
                     "  Tahmini ek cagri: %d gorev x %d operasyon = %d ana cagri.\n"
-                    "  (Birim maliyet fiyat tablosu onaylandiktan sonra hesaplanacak.)\n"
+                    "  %s\n"
                     "  Onaylamak icin --confirm-paid-retry ekleyin; onaysiz kosu DURDURULDU.",
-                    len(paid), len(paid), len(operations), len(paid) * len(operations),
+                    len(paid), len(paid), len(operations), extra_calls,
+                    _paid_retry_cost_note(call_ledger, [key for key, _ in paid], extra_calls),
                 )
                 sys.exit(2)
             for key, record in candidates:

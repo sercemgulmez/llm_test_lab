@@ -501,9 +501,21 @@ def validate_generated_cases(op: ApiOperation, rows: List[dict], num_cases: int)
 
 
 def _apply_token_tracking(rows: List[Dict], total_tokens: int) -> None:
-    """Uretilen satirlara token sayisini yazar."""
-    for row in rows:
-        row["tokens_used"] = total_tokens
+    """Operasyonun toplam token'ini satirlara PAYLASTIRIR (K4).
+
+    Eskiden operasyon toplami HER satira ayni ayni yazilirdi; satirlari toplamak
+    gercek tuketimi satir sayisi katina cikariyordu. Artik toplam esit bolunur,
+    kalan ilk satirlara birer birer dagitilir; boylece
+    sum(row["tokens_used"]) == total_tokens her zaman saglanir.
+
+    Tek satirli durumda (smoke test) sonuc degismez: satira toplamin tamami yazilir.
+    """
+    if not rows:
+        return
+    count = len(rows)
+    base, remainder = divmod(int(total_tokens or 0), count)
+    for index, row in enumerate(rows):
+        row["tokens_used"] = base + (1 if index < remainder else 0)
 
 
 class BaseGenerator(ABC):

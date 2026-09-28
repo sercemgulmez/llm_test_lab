@@ -16,10 +16,12 @@ Tum serbest metin alanlari redact_secrets'tan gecirilir.
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import pricing
 from checkpoint import _JsonlLog
 from error_taxonomy import classify_error, failure_origin
 from models import TokenUsage
@@ -75,6 +77,12 @@ class CallLedger:
         self.path = self.dir / "calls.jsonl"
         self._log = _JsonlLog(self.path, flush_every=1)  # her cagridan sonra diske
         self.write_errors: list[str] = []
+        # B4(a): harcamanin TEK kaynagi defterdir. Kosu ICINDE de ayni toplam
+        # kullanilsin diye burada canli birikim tutulur (K6 esikleri bunu okur).
+        self._spend_lock = threading.Lock()
+        self._spend_billed = 0.0
+        self._spend_list_equivalent = 0.0
+        self._unpriced_calls = 0
 
     def _safe_append(self, record: dict) -> None:
         """Defter yazimi BASARISIZ olsa bile kosu devam etmeli.
@@ -131,6 +139,7 @@ class CallLedger:
             "finish_reason": (call_meta or {}).get("finish_reason"),
             "sampling": _clean((call_meta or {}).get("sampling") or {}),
             **usage.to_dict(),
+            **self._cost_fields(usage, (call_meta or {}).get("model_requested")),
             "accepted_cases": accepted_cases,
             "rejected_cases": rejected_cases,
             "raw_response": raw[:MAX_RAW_RESPONSE_CHARS],
@@ -178,6 +187,13 @@ class CallLedger:
             "model_returned": (call_meta or {}).get("model_returned"),
             "sampling": _clean((call_meta or {}).get("sampling") or {}),
             **TokenUsage().to_dict(),
+            # Yanit alinamadi: saglayici token bildirmedi, dolayisiyla bu cagrinin
+            # para harcayip harcamadigi BILINMIYOR. Sifir YAZILMAZ; kayit
+            # fiyatlandirilamamis sayilir ve toplam "eksik" olarak raporlanir.
+            "cost_usd_billed": None,
+            "cost_usd_list_equivalent": None,
+            "cost_basis": "cagri_basarisiz_token_bildirilmedi",
+            "pricing_available": False,
             "accepted_cases": 0,
             "rejected_cases": 0,
             "raw_response": "",
@@ -225,6 +241,36 @@ class CallLedger:
             "failure_origin": origin,
             "cases": [_case_entry(row) for row in cases],
         })
+
+    def _cost_fields(self, usage: TokenUsage, model: str | None) -> dict:
+        """Cagri basina maliyet alanlari; ayni anda canli toplami da gunceller.
+
+        Fiyat tablosu bos oldugu surece tutarlar None kalir ve cagri
+        `unpriced_calls` icinde sayilir — maliyet ASLA tahmin edilmez.
+        """
+        cost = pricing.cost_for(model or "", usage)
+        with self._spend_lock:
+            if cost.pricing_available:
+                self._spend_billed += cost.cost_usd_billed or 0.0
+                self._spend_list_equivalent += cost.cost_usd_list_equivalent or 0.0
+            else:
+                self._unpriced_calls += 1
+        return cost.to_dict()
+
+    def spend_so_far(self) -> dict:
+        """Kosu ICINDEKI canli harcama — butce esikleri bunu kullanir (K6).
+
+        Kapsam: bu defterin yazdigi TUM cagrilar. Iptal edilen (revoke edilen)
+        nesillerin cagrilari da dahildir, cunku para yine harcanmistir; defter
+        append-only oldugu icin bu kendiliginden saglanir.
+        """
+        with self._spend_lock:
+            return {
+                "cost_usd_billed": round(self._spend_billed, 6),
+                "cost_usd_list_equivalent": round(self._spend_list_equivalent, 6),
+                "unpriced_calls": self._unpriced_calls,
+                "pricing_available": pricing.price_table_ready(),
+            }
 
     def flush(self) -> None:
         if self.enabled:
@@ -274,7 +320,45 @@ def summarize_by_generator(records: list[dict]) -> list[dict]:
             "fallback_share": round(fallback_cases / produced, 4) if produced else None,
             "input_tokens": sum(int(r.get("input_tokens") or 0) for r in api_calls),
             "output_tokens": sum(int(r.get("output_tokens") or 0) for r in api_calls),
+            "reasoning_tokens": sum(int(r.get("reasoning_tokens") or 0) for r in api_calls),
+            "billable_output_tokens": sum(int(r.get("billable_output_tokens") or 0) for r in api_calls),
             "total_tokens": sum(int(r.get("total_tokens") or 0) for r in api_calls),
             "token_split_available": all(bool(r.get("split_available")) for r in api_calls) if api_calls else False,
+            **{f"spend_{key}": value for key, value in total_spend(items).items()},
         })
     return summary
+
+
+def total_spend(records: list[dict]) -> dict:
+    """Defterdeki TUM kayitlar uzerinden toplam harcama (B4(a)).
+
+    CSV degil DEFTER esas alinir: CSV yalnizca kosunun sonunda hayatta kalan
+    satirlari icerir, oysa para iptal edilen nesiller ve yanit alinamayan
+    cagrilar icin de harcanmis olabilir. Bu yuzden hicbir kayit turu elenmez.
+
+    `unpriced_calls` > 0 ise toplam EKSIKTIR ve oyle raporlanmalidir.
+    """
+    billed = 0.0
+    list_equivalent = 0.0
+    priced = 0
+    unpriced = 0
+    reasons: dict[str, int] = {}
+    for record in records:
+        if record.get("call_type") == "fallback":
+            continue  # sablon uretimi, saglayiciya cagri degil
+        if record.get("pricing_available"):
+            billed += float(record.get("cost_usd_billed") or 0.0)
+            list_equivalent += float(record.get("cost_usd_list_equivalent") or 0.0)
+            priced += 1
+        else:
+            unpriced += 1
+            basis = str(record.get("cost_basis") or "bilinmiyor")
+            reasons[basis] = reasons.get(basis, 0) + 1
+    return {
+        "cost_usd_billed": round(billed, 6),
+        "cost_usd_list_equivalent": round(list_equivalent, 6),
+        "priced_calls": priced,
+        "unpriced_calls": unpriced,
+        "unpriced_reasons": reasons,
+        "complete": unpriced == 0,
+    }
