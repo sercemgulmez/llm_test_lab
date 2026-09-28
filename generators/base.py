@@ -758,7 +758,12 @@ class BaseGenerator(ABC):
                 is_missing_key = isinstance(exc, RuntimeError) and "environment variable is not set" in str(exc)
                 if is_missing_key or _is_non_retryable_generation_error(exc):
                     self._aborted = True
-                    _logger.error("  [HATA] %s — generator iptal edildi: %s", op.op_id, safe_exc)
+                    if is_missing_key:
+                        # Eksik anahtar bir calisma hatasi degil, konfigurasyon eksigidir:
+                        # generator atlanir ve pipeline devam eder.
+                        _logger.warning("  [ATLANDI] %s — API anahtari tanimli degil: %s", op.op_id, safe_exc)
+                    else:
+                        _logger.error("  [HATA] %s — generator iptal edildi: %s", op.op_id, safe_exc)
                     break
                 if attempt < RETRY_MAX_ATTEMPTS:
                     wait = RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1))

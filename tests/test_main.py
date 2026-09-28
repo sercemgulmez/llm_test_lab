@@ -1,3 +1,5 @@
+import pytest
+
 import config
 import main
 from generators import GENERATOR_REGISTRY
@@ -128,3 +130,139 @@ def test_traditional_rows_are_not_duplicated_end_to_end():
     ]
     assert len(identities) == len(set(identities)), f"Duplicate tc_id: {identities}"
     assert len(rows) == 6  # 2 operasyon × 3 case
+
+
+def test_missing_api_keys_are_skipped_with_warning_not_error(monkeypatch, caplog, tmp_path):
+    """K8: anahtarsiz generator'lar pre-flight'ta atlanir.
+
+    Orijinal denetim iddiasi ("main() cokuyor") ampirik olarak yanlisti; gercek
+    kusur log seviyesiydi: her gorev ERROR uretiyordu. Pre-flight sonrasi hicbir
+    ERROR olmamali, gorev basina tek WARNING olmali ve Traditional devam etmeli.
+    """
+    import logging
+
+    for env_var in ("OPENAI_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY", "ANTHROPIC_API_KEY"):
+        monkeypatch.delenv(env_var, raising=False)
+    monkeypatch.setattr(main, "load_dotenv", lambda *a, **kw: False)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "main.py",
+            "--endpoints", "GET /get,POST /post",
+            "--base-url", "https://httpbin.org",
+            "--num-cases", "2",
+            "--no-run",
+            "--no-checkpoint",
+            "--output-dir", str(tmp_path),
+        ],
+    )
+
+    with caplog.at_level(logging.WARNING):
+        main.main()  # cokmemeli
+
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    skipped = [r for r in caplog.records if "ATLANDI" in r.getMessage()]
+
+    assert not errors, f"Eksik anahtar ERROR uretmemeli: {[r.getMessage() for r in errors]}"
+    # 8 LLM modeli × 2 prompt variant = 16 gorev, her biri bir kez atlanir.
+    assert len(skipped) == (len(GENERATOR_REGISTRY) - 1) * len(config.PROMPT_VARIANTS)
+    # Traditional anahtar gerektirmedigi icin uretim devam etmis olmali.
+    assert list(tmp_path.glob("executed_testcases_*.csv")), "Traditional satirlari yazilmali"
+
+
+def test_non_runtime_error_in_generator_does_not_lose_other_results(monkeypatch, tmp_path):
+    """K9: bir generator'in RuntimeError OLMAYAN istisnasi tum kosuyu oldurmemeli.
+
+    Fix oncesi main.py yalnizca RuntimeError yakaliyordu; ValueError as_completed
+    dongusunden disari tasiyor ve save_results_csv'ye HIC ULASILMIYORDU.
+    """
+    from generators.openai_gen import OpenAIGenerator
+
+    monkeypatch.setattr(OpenAIGenerator, "_get_client", lambda self: object())
+
+    def _boom(self, *args, **kwargs):
+        raise ValueError("beklenmedik istisna")
+
+    monkeypatch.setattr(OpenAIGenerator, "generate", _boom)
+    monkeypatch.setattr(main, "load_dotenv", lambda *a, **kw: False)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "main.py",
+            "--endpoints", "GET /get,POST /post",
+            "--base-url", "https://httpbin.org",
+            "--generators", "traditional,openai:gpt-4.1",
+            "--num-cases", "2", "--no-run", "--no-checkpoint",
+            "--output-dir", str(tmp_path),
+        ],
+    )
+
+    main.main()  # cokmemeli
+
+    written = list(tmp_path.glob("executed_testcases_*.csv"))
+    assert written, "Diger generator'larin satirlari yine de yazilmali"
+
+
+def test_unexpected_failure_still_writes_partial_results_and_exits_nonzero(monkeypatch, tmp_path):
+    """K9 dis guvenlik agi: generator dongusu disindaki istisnada bile CSV yazilmali."""
+    def _boom(*args, **kwargs):
+        raise OSError("yurutme fazinda beklenmedik istisna")
+
+    monkeypatch.setattr(main, "run_testcases", _boom)
+    monkeypatch.setattr(main, "load_dotenv", lambda *a, **kw: False)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "main.py",
+            "--endpoints", "GET /get,POST /post",
+            "--base-url", "https://httpbin.org",
+            "--generators", "traditional",
+            "--num-cases", "2", "--no-checkpoint",
+            "--output-dir", str(tmp_path),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        main.main()
+
+    assert exc_info.value.code == 1, "Hatali kosu sifir-disi cikis kodu dondurmeli"
+    written = list(tmp_path.glob("executed_testcases_*.csv"))
+    assert written, "Cokmede bile uretilen satirlar diske yazilmali"
+
+
+def test_failed_generator_reports_which_generator_type_and_lost_rows(monkeypatch, caplog, tmp_path):
+    """K9: basarisiz generator icin hangi generator / hata tipi / kac satir kaybi loglanmali."""
+    import logging
+
+    from generators.openai_gen import OpenAIGenerator
+
+    monkeypatch.setattr(OpenAIGenerator, "_get_client", lambda self: object())
+
+    def _boom(self, *args, **kwargs):
+        raise ValueError("beklenmedik istisna")
+
+    monkeypatch.setattr(OpenAIGenerator, "generate", _boom)
+    monkeypatch.setattr(main, "load_dotenv", lambda *a, **kw: False)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "main.py",
+            "--endpoints", "GET /get,POST /post",
+            "--base-url", "https://httpbin.org",
+            "--generators", "traditional,openai:gpt-4.1",
+            "--num-cases", "3", "--no-run", "--no-checkpoint",
+            "--output-dir", str(tmp_path),
+        ],
+    )
+
+    with caplog.at_level(logging.ERROR):
+        main.main()
+
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+
+    assert "OpenAIGenerator" in messages, "hangi generator oldugu loglanmali"
+    assert "ValueError" in messages, "hata tipi loglanmali"
+    # 3 case × 2 operasyon = 6 satir, 2 variant gorevi icin ayri ayri.
+    assert "~6 satir" in messages, "kaybedilen satir sayisi loglanmali"
+    assert "BASARISIZ GENERATOR OZETI" in messages, "kosu sonunda toplu ozet olmali"
+    assert "~12 satir eksik" in messages, "toplam kayip ozette yer almali"
