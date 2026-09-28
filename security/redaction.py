@@ -10,6 +10,9 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("openai-key", re.compile(r"sk-[A-Za-z0-9]{48}")),
     ("groq-key", re.compile(r"gsk_[A-Za-z0-9]{52}")),
     ("gemini-key", re.compile(r"AIza[A-Za-z0-9_\-]{35}")),
+    # Google AI Studio'nun yeni anahtar formati: "AQ." onekiyle baslar ve
+    # AIza desenine UYMAZ; eklenmeden once loglara acik sizabiliyordu.
+    ("gemini-key-aq", re.compile(r"AQ\.[A-Za-z0-9_\-]{20,}")),
     ("bearer-token", re.compile(r"Bearer\s+[A-Za-z0-9\-_\.]{20,}", re.IGNORECASE)),
     (
         "env-assignment",
