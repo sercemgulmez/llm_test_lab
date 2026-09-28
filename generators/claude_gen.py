@@ -4,7 +4,7 @@ import logging
 from typing import Dict, List
 
 import config
-from models import ApiOperation
+from models import ApiOperation, TokenUsage
 from generators.base import BaseGenerator, ProviderResponseParseError
 from security.secret_loader import get_api_key
 
@@ -31,7 +31,7 @@ class ClaudeGenerator(BaseGenerator):
             self._client = anthropic.Anthropic(api_key=api_key, timeout=config.REQUEST_TIMEOUT)
         return self._client
 
-    def _request_completion(self, prompt: str, max_tokens: int, smoke: bool = False) -> tuple[str, int]:
+    def _request_completion(self, prompt: str, max_tokens: int, smoke: bool = False) -> tuple[str, TokenUsage]:
         message = self._get_client().messages.create(
             model=self.model,
             max_tokens=max_tokens,
@@ -46,10 +46,17 @@ class ClaudeGenerator(BaseGenerator):
                 f"Provider response parse error: content_blocks={len(content)}; first_block_type={type(content[0]).__name__}"
             )
         usage = getattr(message, "usage", None)
-        total_tokens = 0
-        if usage:
-            total_tokens = (getattr(usage, "input_tokens", 0) or 0) + (getattr(usage, "output_tokens", 0) or 0)
-        return text, total_tokens
+        if usage is None:
+            return text, TokenUsage()
+        input_tokens = getattr(usage, "input_tokens", None)
+        output_tokens = getattr(usage, "output_tokens", None)
+        if input_tokens is None or output_tokens is None:
+            return text, TokenUsage(split_available=False)
+        return text, TokenUsage(
+            input_tokens=int(input_tokens or 0),
+            output_tokens=int(output_tokens or 0),
+            split_available=True,
+        )
 
     def _generate_for_operation(
         self,

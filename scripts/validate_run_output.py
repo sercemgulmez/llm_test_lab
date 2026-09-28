@@ -28,11 +28,16 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from call_ledger import CallLedger, summarize_by_generator
 
 # Bos olmamasi gereken kolonlar. actual_status / pass yalnizca --executed ile zorunlu.
 CRITICAL_COLUMNS = ("generator", "operation_id", "http_method", "path", "tc_id", "title")
@@ -287,6 +292,62 @@ def check_cost(rows: list[dict], fieldnames: list[str], findings: Findings) -> N
                 findings.add("BILGI", f"  {generator}: {total:.6f}")
 
 
+def check_call_ledger(output_dir: str, fallback_threshold: float | None, findings: Findings) -> None:
+    """Cagri defterinden generator basina fallback payi ve kabul orani."""
+    path = CallLedger.latest_path(output_dir)
+    if path is None:
+        findings.add(
+            "UYARI",
+            "Cagri defteri bulunamadi; fallback payi ve kabul orani DOGRULANAMADI "
+            "(kosu --no-call-ledger ile mi calisti?).",
+        )
+        return
+
+    records = CallLedger.load(path)
+    if not records:
+        findings.add("UYARI", f"Cagri defteri bos: {path}")
+        return
+
+    findings.add("BILGI", f"Cagri defteri: {path} ({len(records)} kayit)")
+    summary = summarize_by_generator(records)
+    width = max(max(len(item["generator"]) for item in summary), 9)
+    findings.add("BILGI", "Cagri defteri ozeti:")
+    findings.add(
+        "BILGI",
+        f"  {'Generator':<{width}}  {'Cagri':>5} {'ana':>4} {'rep':>4} {'ret':>4}  "
+        f"{'Kabul':>6} {'Red':>5} {'KabulOran':>9}  {'Fallback':>8} {'FbPay':>7}  {'TokenAyrim':>10}",
+    )
+    for item in summary:
+        acc = "N/A" if item["acceptance_rate"] is None else f"{item['acceptance_rate']:.1%}"
+        fbs = "N/A" if item["fallback_share"] is None else f"{item['fallback_share']:.1%}"
+        findings.add(
+            "BILGI",
+            f"  {item['generator']:<{width}}  {item['api_calls']:>5} {item['main_calls']:>4} "
+            f"{item['repair_calls']:>4} {item['retry_calls']:>4}  {item['accepted_cases']:>6} "
+            f"{item['rejected_cases']:>5} {acc:>9}  {item['fallback_cases']:>8} {fbs:>7}  "
+            f"{'evet' if item['token_split_available'] else 'HAYIR':>10}",
+        )
+
+    for item in summary:
+        if not item["token_split_available"] and item["api_calls"]:
+            findings.add(
+                "UYARI",
+                f"'{item['generator']}': saglayici girdi/cikti token ayrimi vermedi; "
+                f"bu generator icin maliyet AYRISTIRILAMIYOR.",
+            )
+        if (
+            fallback_threshold is not None
+            and item["fallback_share"] is not None
+            and item["fallback_share"] > fallback_threshold
+        ):
+            findings.add(
+                "KRITIK",
+                f"'{item['generator']}': fallback payi {item['fallback_share']:.1%}, "
+                f"esik {fallback_threshold:.1%} asildi — satirlarin buyuk kismi "
+                f"LLM degil sablon uretimi.",
+            )
+
+
 def check_status_sanity(rows: list[dict], fieldnames: list[str], executed: bool, findings: Findings) -> None:
     if "expected_status" in fieldnames:
         distribution = Counter(str(row.get("expected_status", "")).strip() for row in rows)
@@ -326,6 +387,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--tolerance", metavar="R", type=float, default=0.02,
         help="Dengeleme toleransi (varsayilan 0.02 = %%2).",
+    )
+    parser.add_argument(
+        "--fallback-threshold", metavar="R", type=float, default=None,
+        help=(
+            "Generator basina kabul edilebilir azami fallback payi (orn. 0.10 = %%10). "
+            "Verilmezse esik denetimi yapilmaz, yalnizca raporlanir."
+        ),
     )
     parser.add_argument("--executed", action="store_true", help="url/actual_status/pass kolonlarini da zorunlu dene.")
     return parser.parse_args(argv)
@@ -373,6 +441,7 @@ def main(argv: list[str] | None = None) -> int:
     check_generator_balance(
         rows, args.expected_generators, args.expected_per_generator, args.tolerance, findings
     )
+    check_call_ledger(args.output_dir, args.fallback_threshold, findings)
     check_tokens(rows, fieldnames, findings)
     check_cost(rows, fieldnames, findings)
     check_status_sanity(rows, fieldnames, args.executed, findings)

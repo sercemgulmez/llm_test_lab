@@ -25,6 +25,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
 import config
+from call_ledger import CallLedger
 from checkpoint import DEFAULT_FLUSH_EVERY, RunCheckpoint, row_identity
 from models import ApiOperation
 from parsers.openapi import load_openapi_from_url, extract_operations_from_openapi, manual_operations_input
@@ -382,6 +383,11 @@ def parse_args() -> argparse.Namespace:
         help=f"Kac satirda bir checkpoint diske yazilsin (varsayilan {DEFAULT_FLUSH_EVERY}).",
     )
     parser.add_argument(
+        "--no-call-ledger",
+        action="store_true",
+        help="Cagri defterini kapatir (ham yanit/istek/token kaydi yazilmaz).",
+    )
+    parser.add_argument(
         "--no-checkpoint",
         action="store_true",
         help="Checkpoint yazmayi tamamen kapatir (kisa/deneme kosulari icin).",
@@ -687,6 +693,15 @@ def main() -> None:
         flush_every=getattr(args, "checkpoint_every", DEFAULT_FLUSH_EVERY),
         enabled=not getattr(args, "no_checkpoint", False),
     )
+    # Cagri defteri: kosu anindaki ham yanit/istek/token bilgisi (CSV'den uretilemez).
+    call_ledger = CallLedger(
+        args.output_dir,
+        run_id=run_checkpoint.run_id,
+        enabled=not getattr(args, "no_call_ledger", False),
+    )
+    if call_ledger.enabled:
+        _logger.info("  [defter] cagri kaydi: %s", call_ledger.path)
+
     completed_tasks = run_checkpoint.completed_tasks()
     if run_checkpoint.resumed:
         resumed_rows = run_checkpoint.load_generated_rows()
@@ -735,6 +750,7 @@ def main() -> None:
                 except RuntimeError as exc:
                     _logger.warning("  [%s] ATLANDI — %s", gen_label, redact_secrets(str(exc)))
                     continue
+                gen_instance._call_ledger = call_ledger
                 _logger.info("  [%s] üretiliyor...", gen_label)
                 future = executor.submit(
                     gen_instance.generate,
@@ -820,6 +836,7 @@ def main() -> None:
         )
     finally:
         run_checkpoint.flush()
+        call_ledger.flush()
 
     # Yurutmeye hic gelinemediyse en azindan uretilen satirlari raporla.
     if not executed_rows:
