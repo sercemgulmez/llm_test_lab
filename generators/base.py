@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from config import MAX_PARALLEL_WORKERS, RETRY_BACKOFF_SECONDS, RETRY_MAX_ATTEMPTS
-from error_taxonomy import failure_origin
+from error_taxonomy import classify_error, failure_origin
 from models import ApiOperation, TestCase, TokenUsage
 from security.redaction import redact_secrets
 
@@ -804,6 +804,9 @@ class BaseGenerator(ABC):
                 "invalid_cases": invalid_case_count,
                 "repaired_cases": repair_added,
                 "fallback_cases": len(fallback_rows),
+                "fallback_origin": (
+                    ("altyapi" if had_infrastructure_failure else "icerik") if fallback_rows else None
+                ),
                 "validation_error_summary": validation_error_summary,
             }
         )
@@ -835,6 +838,11 @@ class BaseGenerator(ABC):
             except Exception as exc:
                 safe_exc = redact_secrets(str(exc))
                 is_missing_key = isinstance(exc, RuntimeError) and "environment variable is not set" in str(exc)
+                if failure_origin(classify_error(exc)) == "altyapi":
+                    # Gorev satir uretemeden coktuyse bile bunun ALTYAPI kaynakli
+                    # oldugu kaydedilmeli; aksi halde resume onu yeniden kosulabilir
+                    # aday olarak goremez (fallback bile uretilememis olur).
+                    self._infra_failures = getattr(self, "_infra_failures", 0) + 1
                 if is_missing_key or _is_non_retryable_generation_error(exc):
                     self._aborted = True
                     if is_missing_key:

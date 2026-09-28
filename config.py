@@ -40,6 +40,10 @@ TOTAL_GENERATORS = TOTAL_LLM_MODELS + len(TRADITIONAL_MODELS)
 assert TOTAL_GENERATORS == 9, f"Expected 9 generators, got {TOTAL_GENERATORS}"
 assert TOTAL_LLM_MODELS == 8, f"Expected 8 LLM, got {TOTAL_LLM_MODELS}"
 
+# Ucretli saglayicilar. Groq ve Gemini free-tier ile kosuluyor; bir yeniden
+# kosu bu ikisinde bedelsiz, asagidakilerde PARA HARCAR ve acik onay ister.
+PAID_PROVIDERS: set[str] = {"OpenAI", "Claude"}
+
 # ============= 2 PROMPT STRATEGIES =============
 PROMPT_VARIANTS: dict[str, dict] = {
     "basic": {
