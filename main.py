@@ -533,15 +533,29 @@ def _task_is_paid(task_key: str) -> bool:
 
 
 def _infra_fallback_candidates(task_records: dict) -> list:
-    """Altyapi kaynakli fallback iceren ve henuz yeniden kosulmamis gorevler."""
+    """YALNIZCA altyapi kaynakli fallback iceren ve henuz yeniden kosulmamis gorevler.
+
+    'karma' (hem altyapi hem icerik) gorevler BILEREK DISARIDA BIRAKILIR: icerik
+    kaynakli fallback'e ikinci sans vermek, modelin kotu ciktisini eleyip iyisini
+    saklamak demektir — bu bir SECILIM YANLILIGIDIR. Bkz. _mixed_origin_tasks.
+    """
     candidates = []
     for task_key, record in sorted(task_records.items()):
-        if record.get("failure_origin") not in ("altyapi", "karma"):
+        if record.get("failure_origin") != "altyapi":
             continue
         if int(record.get("retry_count") or 0) >= 1:
             continue  # gorev basina en fazla 1 yeniden kosu
         candidates.append((task_key, record))
     return candidates
+
+
+def _mixed_origin_tasks(task_records: dict) -> list:
+    """Hem altyapi hem icerik kaynakli basarisizlik iceren gorevler.
+
+    Yeniden KOSULMAZ; yalnizca raporlanir ki kosu sonrasi analizde bu gorevlerin
+    fallback payinin bir kismi altyapi kaynakli oldugu bilinsin.
+    """
+    return [(k, r) for k, r in sorted(task_records.items()) if r.get("failure_origin") == "karma"]
 
 
 def _generation_task_key(gen_instance, variant_name: str) -> str:
@@ -752,8 +766,21 @@ def main() -> None:
             sys.exit(1)
         candidates = _infra_fallback_candidates(task_records)
         for key, rec in sorted(task_records.items()):
-            if rec.get("failure_origin") in ("altyapi", "karma") and int(rec.get("retry_count") or 0) >= 1:
+            if rec.get("failure_origin") == "altyapi" and int(rec.get("retry_count") or 0) >= 1:
                 _logger.warning("  [yeniden kosu] %s daha once bir kez yeniden kosuldu, ATLANDI.", key)
+
+        mixed = _mixed_origin_tasks(task_records)
+        if mixed:
+            _logger.warning(
+                "  [yeniden kosu] %d gorev KARMA (altyapi + icerik) kaynakli, YENIDEN KOSULMADI "
+                "(icerik kaynakli fallback'e ikinci sans vermek secilim yanliligi olurdu):",
+                len(mixed),
+            )
+            for key, record in mixed:
+                _logger.warning(
+                    "      %s | karma, yeniden kosulmadi | fallback=%s satir",
+                    key, record.get("fallback_cases"),
+                )
 
         if not candidates:
             _logger.info("  [yeniden kosu] altyapi kaynakli fallback iceren yeniden kosulabilir gorev yok.")
