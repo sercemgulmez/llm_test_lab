@@ -6,7 +6,7 @@ import logging
 from typing import Dict, List
 
 import config
-from models import ApiOperation
+from models import ApiOperation, TokenUsage
 from generators.base import BaseGenerator, ProviderResponseParseError
 from security.secret_loader import get_api_key_from_env
 
@@ -60,7 +60,7 @@ class OpenAIGenerator(BaseGenerator):
             f"tool_calls_present={bool(tool_calls)}; refusal_present={bool(refusal)}"
         )
 
-    def _request_completion(self, prompt: str, max_tokens: int, smoke: bool = False) -> tuple[str, int]:
+    def _request_completion(self, prompt: str, max_tokens: int, smoke: bool = False) -> tuple[str, TokenUsage]:
         request_kwargs = {
             "model": self.model,
             "max_completion_tokens": max_tokens,
@@ -80,7 +80,18 @@ class OpenAIGenerator(BaseGenerator):
         if not isinstance(text, str) or not text.strip():
             raise ProviderResponseParseError(f"Provider response parse error: {self._response_metadata(resp)}")
         usage = getattr(resp, "usage", None)
-        return text, (getattr(usage, "total_tokens", 0) or 0)
+        prompt_tokens = getattr(usage, "prompt_tokens", None)
+        completion_tokens = getattr(usage, "completion_tokens", None)
+        total = getattr(usage, "total_tokens", 0) or 0
+        if prompt_tokens is None or completion_tokens is None:
+            # Saglayici ayrim vermedi: UYDURMA, yalnizca toplami bildir.
+            return text, TokenUsage(total_tokens=total, split_available=False)
+        return text, TokenUsage(
+            input_tokens=int(prompt_tokens or 0),
+            output_tokens=int(completion_tokens or 0),
+            total_tokens=total,
+            split_available=True,
+        )
 
     def _generate_for_operation(
         self,

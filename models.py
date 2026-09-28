@@ -6,6 +6,43 @@ from typing import Any, Optional
 
 
 @dataclass
+class TokenUsage:
+    """Bir LLM cagrisinin token tuketimi.
+
+    `split_available=False` ise saglayici girdi/cikti ayrimini vermemistir ve
+    yalnizca toplam bilinir. Bu durumda AYRISTIRMA UYDURULMAZ; maliyet hesabi
+    bu cagriyi "ayristirilamiyor" olarak isaretler.
+    """
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    split_available: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.total_tokens:
+            self.total_tokens = (self.input_tokens or 0) + (self.output_tokens or 0)
+
+    @classmethod
+    def coerce(cls, value: Any) -> "TokenUsage":
+        """int ya da TokenUsage kabul eder (geri uyumluluk)."""
+        if isinstance(value, cls):
+            return value
+        try:
+            return cls(total_tokens=int(value or 0))
+        except (TypeError, ValueError):
+            return cls()
+
+    def to_dict(self) -> dict:
+        return {
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "total_tokens": self.total_tokens,
+            "split_available": self.split_available,
+        }
+
+
+@dataclass
 class ApiOperation:
     """OpenAPI'den veya manuel giristen alinan bir API operasyonunu temsil eder."""
 

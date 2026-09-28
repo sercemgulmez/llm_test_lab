@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from config import MAX_PARALLEL_WORKERS, RETRY_BACKOFF_SECONDS, RETRY_MAX_ATTEMPTS
-from models import ApiOperation, TestCase
+from models import ApiOperation, TestCase, TokenUsage
 from security.redaction import redact_secrets
 
 _logger = logging.getLogger(__name__)
@@ -531,7 +531,7 @@ class BaseGenerator(ABC):
                 f"Model output format error: text_length={len(text)}; validation={detail}"
             )
         valid[0]["prompt_variant"] = "smoke"
-        _apply_token_tracking(valid, used_tokens)
+        _apply_token_tracking(valid, TokenUsage.coerce(used_tokens).total_tokens)
         return valid
 
     def _request_completion(self, prompt: str, max_tokens: int, smoke: bool = False) -> Tuple[str, int]:
@@ -646,17 +646,22 @@ class BaseGenerator(ABC):
     ) -> List[Dict]:
         accepted_rows: List[dict] = []
         invalid_rows: List[dict] = []
-        total_tokens = 0
+        call_usages: List[TokenUsage] = []
         total_parsed_cases = 0
         initial_valid_count = 0
         repair_added = 0
         invalid_case_count = 0
         validation_error_summary: dict[str, int] = {}
 
+        ledger = getattr(self, "_call_ledger", None)
+        retry_index = getattr(self, "_retry_index", 1)
+        previously_accepted = 0  # defterde kumulatif degil ARTIMSAL sayi tutulur
+
         prompt = build_llm_prompt(op, num_cases, variant_name, variant_desc)
         for attempt in range(3):
             text, used_tokens = request_completion(prompt)
-            total_tokens += used_tokens
+            usage = TokenUsage.coerce(used_tokens)
+            call_usages.append(usage)
             parsed_rows = parse_llm_json_to_rows(text, op, generator_name)
             source_label = "generated" if attempt == 0 else "repaired"
             for row in parsed_rows:
@@ -677,6 +682,31 @@ class BaseGenerator(ABC):
             for invalid in invalid_rows:
                 for error in invalid.get("errors", []):
                     validation_error_summary[error] = validation_error_summary.get(error, 0) + 1
+
+            if ledger is not None:
+                if attempt > 0:
+                    call_type = "repair"
+                elif retry_index > 1:
+                    call_type = "retry"
+                else:
+                    call_type = "ana"
+                ledger.record_call(
+                    generator=generator_name,
+                    variant=variant_name,
+                    operation_id=op.op_id,
+                    method=op.method,
+                    path=op.path,
+                    attempt=attempt,
+                    call_type=call_type,
+                    usage=usage,
+                    accepted_cases=max(0, llm_valid_count - previously_accepted),
+                    rejected_cases=len(invalid_rows),
+                    raw_response=text,
+                    cases=accepted_rows,
+                    validation_errors=invalid_rows,
+                )
+
+            previously_accepted = llm_valid_count
 
             if attempt == 0:
                 initial_valid_count = llm_valid_count
@@ -706,10 +736,20 @@ class BaseGenerator(ABC):
                 existing_rows=accepted_rows,
             )
             accepted_rows.extend(fallback_rows)
+            if ledger is not None and fallback_rows:
+                ledger.record_fallback(
+                    generator=generator_name,
+                    variant=variant_name,
+                    operation_id=op.op_id,
+                    method=op.method,
+                    path=op.path,
+                    cases=fallback_rows,
+                )
 
         final_rows = accepted_rows[:num_cases]
         for row in final_rows:
             row["prompt_variant"] = variant_name
+        total_tokens = sum(item.total_tokens for item in call_usages)
         if total_tokens:
             _apply_token_tracking(final_rows, total_tokens)
 
@@ -751,6 +791,7 @@ class BaseGenerator(ABC):
         if self._aborted:
             return []
         for attempt in range(1, RETRY_MAX_ATTEMPTS + 1):
+            self._retry_index = attempt
             try:
                 return self._generate_for_operation(op, variant_name, variant_desc, num_cases)
             except Exception as exc:

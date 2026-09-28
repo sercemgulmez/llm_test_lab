@@ -3,7 +3,7 @@
 import logging
 from typing import Dict, List
 
-from models import ApiOperation
+from models import ApiOperation, TokenUsage
 from generators.base import BaseGenerator, ProviderResponseParseError
 from security.secret_loader import get_api_key
 
@@ -54,7 +54,7 @@ class GeminiGenerator(BaseGenerator):
             f"block_reason={getattr(feedback, 'block_reason', None)}"
         )
 
-    def _request_completion(self, prompt: str, max_tokens: int, smoke: bool = False) -> tuple[str, int]:
+    def _request_completion(self, prompt: str, max_tokens: int, smoke: bool = False) -> tuple[str, TokenUsage]:
         generation_config = {"max_output_tokens": max_tokens}
         if smoke and self.model == "gemini-2.5-flash":
             generation_config["thinking_config"] = {"thinking_budget": 0}
@@ -72,7 +72,17 @@ class GeminiGenerator(BaseGenerator):
         if not isinstance(text, str) or not text.strip():
             raise ProviderResponseParseError(f"Provider response parse error: {self._response_metadata(resp)}")
         usage = getattr(resp, "usage_metadata", None)
-        return text, (getattr(usage, "total_token_count", 0) or 0)
+        prompt_tokens = getattr(usage, "prompt_token_count", None)
+        output_tokens = getattr(usage, "candidates_token_count", None)
+        total = getattr(usage, "total_token_count", 0) or 0
+        if prompt_tokens is None or output_tokens is None:
+            return text, TokenUsage(total_tokens=total, split_available=False)
+        return text, TokenUsage(
+            input_tokens=int(prompt_tokens or 0),
+            output_tokens=int(output_tokens or 0),
+            total_tokens=total,
+            split_available=True,
+        )
 
     def _generate_for_operation(
         self,
