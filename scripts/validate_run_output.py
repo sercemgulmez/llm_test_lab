@@ -40,6 +40,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from call_ledger import CallLedger, summarize_by_generator, total_spend
 from reporters.csv_reporter import (
     CONTENT_SIGNATURE_FIELDS,
+    TOKEN_ALLOCATION_NOTE,
     compute_repetition_stats,
     format_repetition_table,
 )
@@ -240,6 +241,7 @@ def check_tokens(
 
     total_tokens = sum(sum(values) for values in by_generator.values())
     findings.add("BILGI", f"tokens_used toplami (satir bazinda): {total_tokens}")
+    findings.add("BILGI", TOKEN_ALLOCATION_NOTE)
 
     # ── K4: satir toplami gercek tuketimi vermeli ────────────────────────────
     # Eski hata: _apply_token_tracking operasyonun TOPLAM tokenini her satira

@@ -499,6 +499,15 @@ def build_comparison_summary(rows: List[Dict]) -> Dict:
 
 # ── Konsol özet tablosu ────────────────────────────────────────────────────────
 
+TOKEN_ALLOCATION_NOTE = (
+    "NOT: 'tokens_used' satir basina TAHSIS EDILMISTIR (operasyonun toplam token'i satirlara paylastirildi), TEK TEK OLCULMEMISTIR. Tek bir satirin gercek maliyeti bilinemez; olculen deger cagri duzeyindedir ve tek gecerli kaynak cagri defteridir (outputs/.calls/<run_id>/calls.jsonl)."
+)
+
+
+def _print_token_allocation_note() -> None:
+    print(TOKEN_ALLOCATION_NOTE)
+
+
 def print_summary_table(rows: List[Dict]) -> None:
     """Konsola generator bazlı özet tablo basar."""
     if not rows:
@@ -507,6 +516,7 @@ def print_summary_table(rows: List[Dict]) -> None:
 
     metrics = compute_generator_metrics(rows)
     total_all = len(rows)
+    # Raporlama uyarisi: Tokens/Tok-TC kolonlari OLCUM DEGIL TAHSIStir.
     pass_all = sum(1 for r in rows if r.get("pass") is True)
     fail_all = sum(1 for r in rows if r.get("pass") is False)
 
@@ -537,6 +547,7 @@ def print_summary_table(rows: List[Dict]) -> None:
             f"{tok_avg:>6}"
         )
     print(sep)
+    _print_token_allocation_note()
     rate_all = f"{pass_all / total_all:.1%}" if total_all else "N/A"
     print(
         f"{'TOPLAM':<{col_gen}}  "
