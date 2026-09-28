@@ -92,9 +92,27 @@ def test_only_infrastructure_fallback_is_retried_not_content():
     keys = [key for key, _ in main._infra_fallback_candidates(records)]
 
     assert "OpenAIGenerator:gpt-4.1|basic" in keys
-    assert "GeminiGenerator:m|basic" in keys, "karma da altyapi icerir"
     assert "GroqGenerator:m|basic" not in keys, "icerik kaynakli fallback'e DOKUNULMAMALI"
     assert "ClaudeGenerator:m|basic" not in keys
+    assert "GeminiGenerator:m|basic" not in keys, (
+        "karma gorev yeniden KOSULMAMALI: icerik kaynakli fallback'e ikinci sans "
+        "vermek secilim yanliligidir"
+    )
+
+
+def test_mixed_origin_tasks_are_reported_but_not_retried():
+    """Karma gorevler adaydan DUSER ama gorunmez olmaz — raporlanmak uzere listelenir."""
+    records = {
+        "OpenAIGenerator:gpt-4.1|basic": {"failure_origin": "altyapi", "retry_count": 0},
+        "GeminiGenerator:m|basic": {"failure_origin": "karma", "retry_count": 0, "fallback_cases": 4},
+        "GroqGenerator:m|basic": {"failure_origin": "icerik", "retry_count": 0},
+    }
+    mixed = main._mixed_origin_tasks(records)
+
+    assert [key for key, _ in mixed] == ["GeminiGenerator:m|basic"]
+    assert mixed[0][1]["fallback_cases"] == 4, "rapor icin fallback sayisi korunmali"
+    retried = {key for key, _ in main._infra_fallback_candidates(records)}
+    assert retried.isdisjoint({key for key, _ in mixed}), "karma gorev iki listede birden olamaz"
 
 
 def test_second_rerun_is_refused():

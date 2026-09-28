@@ -10,6 +10,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from config import MAX_PARALLEL_WORKERS, RETRY_BACKOFF_SECONDS, RETRY_MAX_ATTEMPTS
 from error_taxonomy import classify_error, failure_origin
+from budget import BudgetExceeded
 from models import ApiOperation, TestCase, TokenUsage
 from security.redaction import redact_secrets
 
@@ -501,9 +502,21 @@ def validate_generated_cases(op: ApiOperation, rows: List[dict], num_cases: int)
 
 
 def _apply_token_tracking(rows: List[Dict], total_tokens: int) -> None:
-    """Uretilen satirlara token sayisini yazar."""
-    for row in rows:
-        row["tokens_used"] = total_tokens
+    """Operasyonun toplam token'ini satirlara PAYLASTIRIR (K4).
+
+    Eskiden operasyon toplami HER satira ayni ayni yazilirdi; satirlari toplamak
+    gercek tuketimi satir sayisi katina cikariyordu. Artik toplam esit bolunur,
+    kalan ilk satirlara birer birer dagitilir; boylece
+    sum(row["tokens_used"]) == total_tokens her zaman saglanir.
+
+    Tek satirli durumda (smoke test) sonuc degismez: satira toplamin tamami yazilir.
+    """
+    if not rows:
+        return
+    count = len(rows)
+    base, remainder = divmod(int(total_tokens or 0), count)
+    for index, row in enumerate(rows):
+        row["tokens_used"] = base + (1 if index < remainder else 0)
 
 
 class BaseGenerator(ABC):
@@ -549,14 +562,23 @@ class BaseGenerator(ABC):
         if not operations or self._aborted:
             return []
         self._generation_summaries = []
+        self._budget_stopped = False
         workers = min(MAX_PARALLEL_WORKERS, len(operations))
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            results = list(
-                executor.map(
-                    lambda op: self._generate_for_operation_with_retry(op, variant_name, variant_desc, num_cases),
-                    operations,
-                )
-            )
+            futures = [
+                executor.submit(self._generate_for_operation_with_retry, op, variant_name, variant_desc, num_cases)
+                for op in operations
+            ]
+            results: List[List[Dict]] = []
+            for future in futures:
+                try:
+                    results.append(future.result())
+                except BudgetExceeded as exc:
+                    # Butce asiminda DIGER operasyonlarin satirlari ATILMAZ:
+                    # onlarin parasi zaten harcandi. Bayrak kaldirilir, main()
+                    # kalan gorevleri iptal eder.
+                    self._budget_stopped = True
+                    _logger.error("  [butce] %s — bu generator durduruldu.", exc)
         return [row for sublist in results for row in sublist]
 
     def _next_tc_id(self, op: ApiOperation, used_ids: set[str]) -> str:
@@ -670,6 +692,9 @@ class BaseGenerator(ABC):
             else:
                 call_type_for_log = "ana"
 
+            # Butce sigortasi cagri ONCESI: sigorta zaten atmissa bu gorev hic
+            # para harcamadan durur (kuyrukta bekleyen gorevler icin onemli).
+            self._check_budget()
             started_at = time.perf_counter()
             try:
                 text, used_tokens = request_completion(prompt)
@@ -737,6 +762,10 @@ class BaseGenerator(ABC):
                 )
 
             previously_accepted = llm_valid_count
+
+            # Cagri SONRASI: maliyet ancak simdi bilinir. Sert esik asildiysa
+            # BudgetExceeded firlar ve kalan denemeler yapilmaz.
+            self._check_budget()
 
             if attempt == 0:
                 initial_valid_count = llm_valid_count
@@ -821,6 +850,12 @@ class BaseGenerator(ABC):
         )
         return final_rows
 
+    def _check_budget(self) -> None:
+        """Butce sigortasi bagliysa esikleri kontrol eder (K6)."""
+        guard = getattr(self, "_budget_guard", None)
+        if guard is not None:
+            guard.check()
+
     def _generate_for_operation_with_retry(
         self,
         op: ApiOperation,
@@ -835,6 +870,11 @@ class BaseGenerator(ABC):
             self._retry_index = attempt
             try:
                 return self._generate_for_operation(op, variant_name, variant_desc, num_cases)
+            except BudgetExceeded:
+                # Butce asimi bir altyapi hatasi DEGILDIR: yeniden denemek para
+                # harcamaya devam etmek olurdu. Generator'i iptal et ve yukari tasi.
+                self._aborted = True
+                raise
             except Exception as exc:
                 safe_exc = redact_secrets(str(exc))
                 is_missing_key = isinstance(exc, RuntimeError) and "environment variable is not set" in str(exc)

@@ -19,6 +19,10 @@ from pathlib import Path
 import sys
 import time
 
+# pricing ortam degiskenine bagli degil; load_dotenv oncesinde guvenle import edilir.
+import budget as budget_module
+import pricing
+
 from dotenv import load_dotenv
 
 # Load project-local secrets without overriding explicitly exported variables.
@@ -533,15 +537,57 @@ def _task_is_paid(task_key: str) -> bool:
 
 
 def _infra_fallback_candidates(task_records: dict) -> list:
-    """Altyapi kaynakli fallback iceren ve henuz yeniden kosulmamis gorevler."""
+    """YALNIZCA altyapi kaynakli fallback iceren ve henuz yeniden kosulmamis gorevler.
+
+    'karma' (hem altyapi hem icerik) gorevler BILEREK DISARIDA BIRAKILIR: icerik
+    kaynakli fallback'e ikinci sans vermek, modelin kotu ciktisini eleyip iyisini
+    saklamak demektir — bu bir SECILIM YANLILIGIDIR. Bkz. _mixed_origin_tasks.
+    """
     candidates = []
     for task_key, record in sorted(task_records.items()):
-        if record.get("failure_origin") not in ("altyapi", "karma"):
+        if record.get("failure_origin") != "altyapi":
             continue
         if int(record.get("retry_count") or 0) >= 1:
             continue  # gorev basina en fazla 1 yeniden kosu
         candidates.append((task_key, record))
     return candidates
+
+
+def _paid_retry_cost_note(call_ledger, paid_task_keys: list, extra_calls: int) -> str:
+    """Yeniden kosunun DOLAR tahmini (B4(f)).
+
+    Tahmin, onceki kosunun DEFTERINDEKI olculmus ortalama cagri maliyetinden
+    turetilir — uydurma bir birim fiyattan degil. Fiyat tablosu onaylanmadiysa
+    ya da defterde fiyatlanmis cagri yoksa bunu acikca soyler.
+    """
+    if not pricing.price_table_ready():
+        return "(Dolar tahmini YOK: fiyat tablosu henuz onaylanmadi.)"
+    try:
+        records = CallLedger.load(call_ledger.path)
+    except Exception:  # noqa: BLE001 - tahmin yoklugu kosuyu bozmamali
+        records = []
+    costs = [
+        float(r.get("cost_usd_billed") or 0.0)
+        for r in records
+        if r.get("pricing_available") and r.get("call_type") != "fallback"
+    ]
+    if not costs:
+        return "(Dolar tahmini YOK: defterde fiyatlanmis cagri bulunamadi.)"
+    mean = sum(costs) / len(costs)
+    return (
+        f"Tahmini ek maliyet: {extra_calls} cagri x ~${mean:.4f} (onceki kosunun "
+        f"{len(costs)} cagrisindan olculen ortalama) = ~${extra_calls * mean:.2f}. "
+        f"Repair cagrilari bu tahminin DISINDADIR; gercek tutar daha yuksek olabilir."
+    )
+
+
+def _mixed_origin_tasks(task_records: dict) -> list:
+    """Hem altyapi hem icerik kaynakli basarisizlik iceren gorevler.
+
+    Yeniden KOSULMAZ; yalnizca raporlanir ki kosu sonrasi analizde bu gorevlerin
+    fallback payinin bir kismi altyapi kaynakli oldugu bilinsin.
+    """
+    return [(k, r) for k, r in sorted(task_records.items()) if r.get("failure_origin") == "karma"]
 
 
 def _generation_task_key(gen_instance, variant_name: str) -> str:
@@ -743,6 +789,15 @@ def main() -> None:
     if call_ledger.enabled:
         _logger.info("  [defter] cagri kaydi: %s", call_ledger.path)
 
+    # K6 butce sigortasi — harcamayi DEFTERDEN okur (B4(a)).
+    budget_guard = budget_module.BudgetGuard(call_ledger, enabled=call_ledger.enabled)
+    if budget_guard.armed:
+        _logger.info(
+            "  [butce] sigorta aktif — uyari $%.0f / sert uyari $%.0f / DURDURMA $%.0f",
+            config.BUDGET_THRESHOLDS["warn"], config.BUDGET_THRESHOLDS["hard_warn"],
+            config.BUDGET_THRESHOLDS["stop"],
+        )
+
     task_records = run_checkpoint.task_records()
     retry_counts: dict = {}
 
@@ -752,8 +807,21 @@ def main() -> None:
             sys.exit(1)
         candidates = _infra_fallback_candidates(task_records)
         for key, rec in sorted(task_records.items()):
-            if rec.get("failure_origin") in ("altyapi", "karma") and int(rec.get("retry_count") or 0) >= 1:
+            if rec.get("failure_origin") == "altyapi" and int(rec.get("retry_count") or 0) >= 1:
                 _logger.warning("  [yeniden kosu] %s daha once bir kez yeniden kosuldu, ATLANDI.", key)
+
+        mixed = _mixed_origin_tasks(task_records)
+        if mixed:
+            _logger.warning(
+                "  [yeniden kosu] %d gorev KARMA (altyapi + icerik) kaynakli, YENIDEN KOSULMADI "
+                "(icerik kaynakli fallback'e ikinci sans vermek secilim yanliligi olurdu):",
+                len(mixed),
+            )
+            for key, record in mixed:
+                _logger.warning(
+                    "      %s | karma, yeniden kosulmadi | fallback=%s satir",
+                    key, record.get("fallback_cases"),
+                )
 
         if not candidates:
             _logger.info("  [yeniden kosu] altyapi kaynakli fallback iceren yeniden kosulabilir gorev yok.")
@@ -769,12 +837,14 @@ def main() -> None:
                     record.get("fallback_cases"),
                 )
             if paid and not getattr(args, "confirm_paid_retry", False):
+                extra_calls = len(paid) * len(operations)
                 _logger.error(
                     "\n  UCRETLI yeniden kosu ONAY BEKLIYOR: %d gorev PARA HARCAR.\n"
                     "  Tahmini ek cagri: %d gorev x %d operasyon = %d ana cagri.\n"
-                    "  (Birim maliyet fiyat tablosu onaylandiktan sonra hesaplanacak.)\n"
+                    "  %s\n"
                     "  Onaylamak icin --confirm-paid-retry ekleyin; onaysiz kosu DURDURULDU.",
-                    len(paid), len(paid), len(operations), len(paid) * len(operations),
+                    len(paid), len(paid), len(operations), extra_calls,
+                    _paid_retry_cost_note(call_ledger, [key for key, _ in paid], extra_calls),
                 )
                 sys.exit(2)
             for key, record in candidates:
@@ -796,6 +866,7 @@ def main() -> None:
                      run_checkpoint.run_id, run_checkpoint.run_id)
 
     generation_started_at = time.perf_counter()
+    budget_stopped = False
     executed_rows: list = []
     run_failure: Exception | None = None
     failed_generations: list[dict] = []
@@ -832,6 +903,10 @@ def main() -> None:
                     _logger.warning("  [%s] ATLANDI — %s", gen_label, redact_secrets(str(exc)))
                     continue
                 gen_instance._call_ledger = call_ledger
+                gen_instance._budget_guard = budget_guard
+                if budget_stopped:
+                    _logger.error("  [butce] %s ATLANDI — sert esik asildi.", gen_label)
+                    continue
                 _logger.info("  [%s] üretiliyor...", gen_label)
                 future = executor.submit(
                     gen_instance.generate,
@@ -862,7 +937,14 @@ def main() -> None:
                         failure_origin=origin,
                         retry_count=retry_counts.get(task_key, 0),
                     )
+                    if getattr(gen_instance, "_budget_stopped", False):
+                        budget_stopped = True
                     _logger.info("  [%s] %d senaryo üretildi.", gen_label, len(rows))
+                except budget_module.BudgetExceeded as exc:
+                    # Butce asimi tek bir generator'in hatasi degil, kosu genelinde
+                    # bir DURDURMA karari: diger gorevler de calistirilmaz.
+                    budget_stopped = True
+                    _logger.error("  [butce] %s", exc)
                 except Exception as exc:  # noqa: BLE001 - tek generator tum kosuyu oldurmemeli
                     # Bu gorevin uretmesi beklenen satir sayisi = kaybedilen satir sayisi.
                     lost_rows = num_cases * len(operations)
@@ -877,6 +959,13 @@ def main() -> None:
                         "(diger generator'lar devam ediyor)",
                         gen_label, type(exc).__name__, redact_secrets(str(exc)), lost_rows,
                     )
+
+        if budget_stopped:
+            _logger.error(
+                "\n── BUTCE DURDURMASI ── Defter toplami $%.2f, sert esik $%.2f. "
+                "Uretim erken kesildi; o ana kadarki satirlar CSV'ye yaziliyor.",
+                budget_guard.spend(), config.BUDGET_THRESHOLDS["stop"],
+            )
 
         if failed_generations:
             total_lost = sum(item["lost_rows"] for item in failed_generations)

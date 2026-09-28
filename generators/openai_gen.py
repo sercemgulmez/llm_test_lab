@@ -95,11 +95,18 @@ class OpenAIGenerator(BaseGenerator):
         if prompt_tokens is None or completion_tokens is None:
             # Saglayici ayrim vermedi: UYDURMA, yalnizca toplami bildir.
             return text, TokenUsage(total_tokens=total, split_available=False)
+        # OpenAI uyumlu semada reasoning token'lari completion_tokens'in ICINDEDIR
+        # ve cikti fiyatindan faturalanir; burada yalnizca gorunurluk icin ayri
+        # kaydedilir, toplama TEKRAR EKLENMEZ.
+        details = getattr(usage, "completion_tokens_details", None)
+        reasoning = getattr(details, "reasoning_tokens", None) if details is not None else None
         return text, TokenUsage(
             input_tokens=int(prompt_tokens or 0),
             output_tokens=int(completion_tokens or 0),
             total_tokens=total,
             split_available=True,
+            reasoning_tokens=int(reasoning or 0),
+            reasoning_included_in_output=True,
         )
 
     def _generate_for_operation(

@@ -44,6 +44,16 @@ assert TOTAL_LLM_MODELS == 8, f"Expected 8 LLM, got {TOTAL_LLM_MODELS}"
 # kosu bu ikisinde bedelsiz, asagidakilerde PARA HARCAR ve acik onay ister.
 PAID_PROVIDERS: set[str] = {"OpenAI", "Claude"}
 
+# ============= BUTCE SIGORTASI (K6) =============
+# Senaryo A butcesi $80. Esikler DEFTERDEKI toplam faturalanan harcamaya gore
+# degerlendirilir (bkz. budget.py). "stop" asildiginda kalan uretim gorevleri
+# iptal edilir; o ana kadar uretilen satirlar yine de CSV'ye yazilir.
+BUDGET_THRESHOLDS: dict[str, float] = {
+    "warn": 40.0,       # butcenin %50'si
+    "hard_warn": 64.0,  # butcenin %80'i
+    "stop": 80.0,       # sert tavan
+}
+
 # ============= 2 PROMPT STRATEGIES =============
 PROMPT_VARIANTS: dict[str, dict] = {
     "basic": {
