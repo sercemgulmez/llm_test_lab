@@ -20,6 +20,7 @@ import sys
 import time
 
 # pricing ortam degiskenine bagli degil; load_dotenv oncesinde guvenle import edilir.
+import budget as budget_module
 import pricing
 
 from dotenv import load_dotenv
@@ -788,6 +789,15 @@ def main() -> None:
     if call_ledger.enabled:
         _logger.info("  [defter] cagri kaydi: %s", call_ledger.path)
 
+    # K6 butce sigortasi — harcamayi DEFTERDEN okur (B4(a)).
+    budget_guard = budget_module.BudgetGuard(call_ledger, enabled=call_ledger.enabled)
+    if budget_guard.armed:
+        _logger.info(
+            "  [butce] sigorta aktif — uyari $%.0f / sert uyari $%.0f / DURDURMA $%.0f",
+            config.BUDGET_THRESHOLDS["warn"], config.BUDGET_THRESHOLDS["hard_warn"],
+            config.BUDGET_THRESHOLDS["stop"],
+        )
+
     task_records = run_checkpoint.task_records()
     retry_counts: dict = {}
 
@@ -856,6 +866,7 @@ def main() -> None:
                      run_checkpoint.run_id, run_checkpoint.run_id)
 
     generation_started_at = time.perf_counter()
+    budget_stopped = False
     executed_rows: list = []
     run_failure: Exception | None = None
     failed_generations: list[dict] = []
@@ -892,6 +903,10 @@ def main() -> None:
                     _logger.warning("  [%s] ATLANDI — %s", gen_label, redact_secrets(str(exc)))
                     continue
                 gen_instance._call_ledger = call_ledger
+                gen_instance._budget_guard = budget_guard
+                if budget_stopped:
+                    _logger.error("  [butce] %s ATLANDI — sert esik asildi.", gen_label)
+                    continue
                 _logger.info("  [%s] üretiliyor...", gen_label)
                 future = executor.submit(
                     gen_instance.generate,
@@ -922,7 +937,14 @@ def main() -> None:
                         failure_origin=origin,
                         retry_count=retry_counts.get(task_key, 0),
                     )
+                    if getattr(gen_instance, "_budget_stopped", False):
+                        budget_stopped = True
                     _logger.info("  [%s] %d senaryo üretildi.", gen_label, len(rows))
+                except budget_module.BudgetExceeded as exc:
+                    # Butce asimi tek bir generator'in hatasi degil, kosu genelinde
+                    # bir DURDURMA karari: diger gorevler de calistirilmaz.
+                    budget_stopped = True
+                    _logger.error("  [butce] %s", exc)
                 except Exception as exc:  # noqa: BLE001 - tek generator tum kosuyu oldurmemeli
                     # Bu gorevin uretmesi beklenen satir sayisi = kaybedilen satir sayisi.
                     lost_rows = num_cases * len(operations)
@@ -937,6 +959,13 @@ def main() -> None:
                         "(diger generator'lar devam ediyor)",
                         gen_label, type(exc).__name__, redact_secrets(str(exc)), lost_rows,
                     )
+
+        if budget_stopped:
+            _logger.error(
+                "\n── BUTCE DURDURMASI ── Defter toplami $%.2f, sert esik $%.2f. "
+                "Uretim erken kesildi; o ana kadarki satirlar CSV'ye yaziliyor.",
+                budget_guard.spend(), config.BUDGET_THRESHOLDS["stop"],
+            )
 
         if failed_generations:
             total_lost = sum(item["lost_rows"] for item in failed_generations)

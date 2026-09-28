@@ -83,6 +83,26 @@ class CallLedger:
         self._spend_billed = 0.0
         self._spend_list_equivalent = 0.0
         self._unpriced_calls = 0
+        self._seed_spend_from_disk()
+
+    def _seed_spend_from_disk(self) -> None:
+        """--resume: ayni run_id'nin ONCEKI harcamasi da butceye sayilir.
+
+        Defter dosyasi run_id ile paylasildigi icin surdurulen bir kosuda
+        dosya zaten doludur. Bu tutar yuklenmezse butce sigortasi her
+        yeniden baslatmada sifirdan sayar ve $80 tavani asilabilir.
+        """
+        if not self.enabled or not self.path.is_file():
+            return
+        previous = total_spend(self.load(self.path))
+        self._spend_billed = previous["cost_usd_billed"]
+        self._spend_list_equivalent = previous["cost_usd_list_equivalent"]
+        self._unpriced_calls = previous["unpriced_calls"]
+        if self._spend_billed or self._unpriced_calls:
+            _logger.info(
+                "  [defter] onceki harcama yuklendi: $%.4f (%d fiyatlanamayan cagri)",
+                self._spend_billed, self._unpriced_calls,
+            )
 
     def _safe_append(self, record: dict) -> None:
         """Defter yazimi BASARISIZ olsa bile kosu devam etmeli.
