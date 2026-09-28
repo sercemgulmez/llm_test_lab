@@ -14,6 +14,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from error_taxonomy import classify_error
 from generators import GENERATOR_REGISTRY
 from security.redaction import redact_secrets
 
@@ -47,37 +48,7 @@ def _safe_error(exc: Exception) -> str:
     return message or exc.__class__.__name__
 
 
-def _classify_error(exc: Exception) -> str:
-    status = getattr(exc, "status_code", None)
-    code = str(getattr(exc, "code", "") or "").lower()
-    name = exc.__class__.__name__.lower()
-    message = str(exc).lower()
-    combined = f"{code} {name} {message}"
-    if "providerresponseparseerror" in combined or "provider response parse error" in combined:
-        return "PROVIDER_RESPONSE_PARSE_ERROR"
-    if "modeloutputformaterror" in combined or "model output format error" in combined:
-        return "MODEL_OUTPUT_FORMAT_ERROR"
-    if isinstance(exc, TimeoutError) or "timeout" in combined or "timed out" in combined:
-        return "TIMEOUT"
-    if any(term in combined for term in ("connection", "network", "dns", "name resolution")):
-        return "NETWORK_ERROR"
-    if status == 401 or any(term in combined for term in ("invalid api key", "incorrect api key", "authentication_error", "unauthorized")):
-        return "AUTH_ERROR"
-    if any(term in combined for term in ("quota", "billing", "credit", "insufficient_quota")):
-        return "BILLING_QUOTA_ERROR"
-    if status == 429 or any(term in combined for term in ("rate limit", "rate_limit", "too many requests")):
-        return "RATE_LIMIT"
-    if status == 404 or any(term in combined for term in ("model_not_found", "model not found", "does not exist", "no longer available")):
-        return "MODEL_NOT_FOUND"
-    if status == 403 or any(term in combined for term in ("access denied", "permission", "not authorized", "forbidden")):
-        return "MODEL_ACCESS_ERROR"
-    if status in (400, 422) or isinstance(exc, (TypeError, ValueError)):
-        return "REQUEST_CONTRACT_ERROR"
-    if status is not None and int(status) >= 500:
-        return "PROVIDER_ERROR"
-    if isinstance(exc, (ImportError, AttributeError, NameError, NotImplementedError)):
-        return "CODE_ERROR"
-    return "UNKNOWN_ERROR"
+_classify_error = classify_error
 
 
 def _model_specs(registry=None) -> list[tuple[type, str, str]]:

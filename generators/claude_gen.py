@@ -37,6 +37,13 @@ class ClaudeGenerator(BaseGenerator):
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
         )
+        self._last_call_meta = {
+            "model_requested": self.model,
+            "model_returned": getattr(message, "model", None),
+            "response_id": getattr(message, "id", None),
+            "finish_reason": getattr(message, "stop_reason", None),
+            "sampling": {"max_tokens": max_tokens},
+        }
         content = getattr(message, "content", None) or []
         if not content:
             raise ProviderResponseParseError("Provider response parse error: content_blocks=0")

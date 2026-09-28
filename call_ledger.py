@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from checkpoint import _JsonlLog
+from error_taxonomy import classify_error, failure_origin
 from models import TokenUsage
 from security.redaction import redact_secrets
 
@@ -73,6 +74,21 @@ class CallLedger:
         self.dir = Path(output_dir) / LEDGER_DIR_NAME / run_id
         self.path = self.dir / "calls.jsonl"
         self._log = _JsonlLog(self.path, flush_every=1)  # her cagridan sonra diske
+        self.write_errors: list[str] = []
+
+    def _safe_append(self, record: dict) -> None:
+        """Defter yazimi BASARISIZ olsa bile kosu devam etmeli.
+
+        Defter bir tani kaydidir; kaybi can sikicidir ama uretilen satirlari
+        ve harcanan parayi bosa cikarmaz. Bu yuzden hata yutulmaz (ERROR ile
+        loglanir ve kosu ozetinde gorunur) ama yukari da firlatilmaz.
+        """
+        try:
+            self._log.append(record)
+        except Exception as exc:  # noqa: BLE001 - defter hatasi kosuyu durdurmamali
+            message = f"{type(exc).__name__}: {redact_secrets(str(exc))}"
+            self.write_errors.append(message)
+            _logger.error("  [defter] KAYIT YAZILAMADI (kosu devam ediyor): %s", message)
 
     def record_call(
         self,
@@ -89,6 +105,9 @@ class CallLedger:
         raw_response: str,
         cases: list[dict] | None = None,
         validation_errors: list[dict] | None = None,
+        repeat_index: int = 0,
+        latency_ms: int | None = None,
+        call_meta: dict | None = None,
     ) -> None:
         if not self.enabled:
             return
@@ -103,7 +122,14 @@ class CallLedger:
             "method": method,
             "path": path,
             "attempt": attempt,
+            "repeat_index": repeat_index,
             "call_type": call_type,
+            "latency_ms": latency_ms,
+            "model_requested": (call_meta or {}).get("model_requested"),
+            "model_returned": (call_meta or {}).get("model_returned"),
+            "response_id": (call_meta or {}).get("response_id"),
+            "finish_reason": (call_meta or {}).get("finish_reason"),
+            "sampling": _clean((call_meta or {}).get("sampling") or {}),
             **usage.to_dict(),
             "accepted_cases": accepted_cases,
             "rejected_cases": rejected_cases,
@@ -113,7 +139,57 @@ class CallLedger:
             "validation_errors": _clean(validation_errors or []),
             "cases": [_case_entry(row) for row in (cases or [])],
         }
-        self._log.append(record)
+        self._safe_append(record)
+
+    def record_failed_call(
+        self,
+        generator: str,
+        variant: str,
+        operation_id: str,
+        method: str,
+        path: str,
+        attempt: int,
+        call_type: str,
+        exc: BaseException,
+        repeat_index: int = 0,
+        latency_ms: int | None = None,
+        call_meta: dict | None = None,
+    ) -> str:
+        """Yanit alinamayan cagriyi (429, kota, timeout, ag) deftere yazar.
+
+        Doner: hata sinifi (cagiran taraf fallback nedenini belirlemek icin kullanir).
+        """
+        error_class = classify_error(exc) if isinstance(exc, Exception) else "UNKNOWN_ERROR"
+        if not self.enabled:
+            return error_class
+        self._safe_append({
+            "ts": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "run_id": self.run_id,
+            "generator": generator,
+            "variant": variant,
+            "operation_id": operation_id,
+            "method": method,
+            "path": path,
+            "attempt": attempt,
+            "repeat_index": repeat_index,
+            "call_type": call_type,
+            "latency_ms": latency_ms,
+            "model_requested": (call_meta or {}).get("model_requested"),
+            "model_returned": (call_meta or {}).get("model_returned"),
+            "sampling": _clean((call_meta or {}).get("sampling") or {}),
+            **TokenUsage().to_dict(),
+            "accepted_cases": 0,
+            "rejected_cases": 0,
+            "raw_response": "",
+            "raw_response_truncated": False,
+            "raw_response_length": 0,
+            "failed": True,
+            "error_class": error_class,
+            "failure_origin": failure_origin(error_class),
+            "error": redact_secrets(str(exc)),
+            "cases": [],
+        })
+        return error_class
 
     def record_fallback(
         self,
@@ -124,11 +200,12 @@ class CallLedger:
         path: str,
         cases: list[dict],
         reason: str = "LLM yeterli gecerli case uretemedi",
+        origin: str = "icerik",
     ) -> None:
         """Fallback satirlari API cagrisi OLMADAN uretilir; ayri kayit turu."""
         if not self.enabled:
             return
-        self._log.append({
+        self._safe_append({
             "ts": datetime.now().astimezone().isoformat(timespec="seconds"),
             "run_id": self.run_id,
             "generator": generator,
@@ -145,6 +222,7 @@ class CallLedger:
             "raw_response_truncated": False,
             "raw_response_length": 0,
             "reason": redact_secrets(reason),
+            "failure_origin": origin,
             "cases": [_case_entry(row) for row in cases],
         })
 

@@ -72,6 +72,15 @@ class OpenAIGenerator(BaseGenerator):
         resp = self._get_client().chat.completions.create(
             **request_kwargs,
         )
+        self._last_call_meta = {
+            "model_requested": self.model,
+            "model_returned": getattr(resp, "model", None),
+            "response_id": getattr(resp, "id", None),
+            "finish_reason": getattr((getattr(resp, "choices", None) or [None])[0], "finish_reason", None),
+            "sampling": {
+                key: value for key, value in request_kwargs.items() if key != "messages"
+            },
+        }
         choices = getattr(resp, "choices", None) or []
         if not choices:
             raise ProviderResponseParseError(f"Provider response parse error: {self._response_metadata(resp)}")

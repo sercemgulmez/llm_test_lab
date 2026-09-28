@@ -850,6 +850,13 @@ def main() -> None:
         save_generator_metrics_csv(metrics, args.output_dir)
         print_summary_table(executed_rows)
 
+    if call_ledger.enabled and call_ledger.write_errors:
+        _logger.error(
+            "\nUYARI: cagri defterine %d kayit YAZILAMADI (kosu etkilenmedi, "
+            "uretilen satirlar korundu). Ilk hata: %s",
+            len(call_ledger.write_errors), call_ledger.write_errors[0],
+        )
+
     if failed_generations:
         total_lost = sum(item["lost_rows"] for item in failed_generations)
         _logger.error(
