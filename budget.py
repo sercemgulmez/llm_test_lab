@@ -56,9 +56,30 @@ class BudgetGuard:
             )
 
     def spend(self) -> float:
+        """Esiklerin olctugu tutar: FATURALANAN + muhafazakar UST TAHMIN.
+
+        Fiyatlanamayan ve yanit alinamayan cagrilar icin sifir varsaymak
+        sigortayi kor ederdi. Ust tahmin ayri bir alanda tutulur ve fatura
+        tahminiyle KARISTIRILMAZ; burada yalnizca muhafazakar tarafta kalmak
+        icin toplanir.
+        """
         if not self.enabled:
             return 0.0
-        return float(self._ledger.spend_so_far().get("cost_usd_billed") or 0.0)
+        snapshot = self._ledger.spend_so_far()
+        return (
+            float(snapshot.get("cost_usd_billed") or 0.0)
+            + float(snapshot.get("cost_usd_guard_estimate") or 0.0)
+        )
+
+    def spend_breakdown(self) -> dict:
+        """Raporlama icin: faturalanan ve ust tahmin AYRI."""
+        if not self.enabled:
+            return {"cost_usd_billed": 0.0, "cost_usd_guard_estimate": 0.0}
+        snapshot = self._ledger.spend_so_far()
+        return {
+            "cost_usd_billed": float(snapshot.get("cost_usd_billed") or 0.0),
+            "cost_usd_guard_estimate": float(snapshot.get("cost_usd_guard_estimate") or 0.0),
+        }
 
     def check(self) -> None:
         """Her cagridan sonra cagrilir. Sert esikte BudgetExceeded firlatir."""
