@@ -40,7 +40,9 @@ class ModelPrice:
     output_usd_per_mtok: float
     billed: bool
     source_url: str
-    fetched_on: str  # ISO tarih — fiyatin cekildigi gun
+    fetched_date: str           # ISO tarih — fiyatin resmi sayfadan cekildigi gun
+    second_source_url: str = ""  # bagimsiz dogrulama (bos = yalnizca tek kaynak)
+    verified: bool = True        # False ise tutar DOGRULANMAMIS sayilir
 
 
 @dataclass(frozen=True)
@@ -62,11 +64,83 @@ class CallCost:
 UNPRICED = CallCost(None, None, BASIS_NO_PRICE, False)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FIYAT TABLOSU — BOS. Kullanici onayi gelene kadar doldurulmaz (B4(c)).
-# Anahtar: config'teki TAM model kimligi (ornegin "gpt-4.1", "claude-haiku-4-5").
+# FIYAT TABLOSU
+#
+# Anahtar: config'teki TAM model kimligi. Tutarlar 1M token basina USD, STANDART
+# (batch/flex/priority degil) fiyatlandirma. 28.09.2026'da resmi sayfalardan
+# cekildi; iki suphe uyandiran girdi bagimsiz ikinci kaynakla dogrulandi.
+#
+# billed=False olanlar free-tier ile kosuluyor: gercek fatura 0, ama
+# cost_usd_list_equivalent yine hesaplanir (tezdeki karsilastirma icin).
 # ─────────────────────────────────────────────────────────────────────────────
-PRICE_TABLE_APPROVED_ON: str | None = None
-PRICE_TABLE: dict[str, ModelPrice] = {}
+PRICE_TABLE_APPROVED_ON: str = "2026-09-28"
+_FETCHED = "2026-09-28"
+
+_OPENAI_PRICING = "https://developers.openai.com/api/docs/pricing"
+_ANTHROPIC_PRICING = "https://platform.claude.com/docs/en/about-claude/pricing"
+_GEMINI_PRICING = "https://ai.google.dev/gemini-api/docs/pricing"
+_GROQ_PRICING = "https://console.groq.com/docs/models"
+_VERTEX_PRICING = "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+_OPENROUTER_MODELS = "https://openrouter.ai/api/v1/models"
+
+PRICE_TABLE: dict[str, ModelPrice] = {
+    # ── OpenAI (UCRETLI) ────────────────────────────────────────────────────
+    # gpt-4.1'in STANDART satiri OpenAI fiyat tablosunda JS ile geliyor ve ham
+    # HTML'de yok; tutar model sayfasindan alindi, OpenRouter'in canli model
+    # API'siyle ve ayni sayfadaki Batch satiriyla ($1/$4 = %50) dogrulandi.
+    "gpt-4.1": ModelPrice(
+        2.00, 8.00, billed=True,
+        source_url="https://developers.openai.com/api/docs/models/gpt-4.1",
+        fetched_date=_FETCHED, second_source_url=_OPENROUTER_MODELS,
+    ),
+    "gpt-4o-mini": ModelPrice(
+        0.15, 0.60, billed=True,
+        source_url=_OPENAI_PRICING, fetched_date=_FETCHED,
+        second_source_url=_OPENROUTER_MODELS,
+    ),
+
+    # ── Anthropic (UCRETLI) ─────────────────────────────────────────────────
+    # Sayfa gorunen adi kullanir ("Claude Sonnet 4.5"); API kimligiyle eslesme
+    # model-deprecations sayfasindaki claude-sonnet-4-5-20250929 satiri uzerinden.
+    "claude-sonnet-4-5": ModelPrice(
+        3.00, 15.00, billed=True,
+        source_url=_ANTHROPIC_PRICING, fetched_date=_FETCHED,
+        second_source_url=_OPENROUTER_MODELS,
+    ),
+    "claude-haiku-4-5": ModelPrice(
+        1.00, 5.00, billed=True,
+        source_url=_ANTHROPIC_PRICING, fetched_date=_FETCHED,
+        second_source_url=_OPENROUTER_MODELS,
+    ),
+
+    # ── Google Gemini (FREE TIER ile kosuluyor) ─────────────────────────────
+    # Cikti satirinin basligi birebir: "Output price (including thinking tokens)".
+    # Vertex AI sayfasi ayni tutari "Text output (response and reasoning)" diye
+    # verir — dusunme token'inin cikti fiyatindan faturalandiginin ikinci teyidi.
+    "gemini-2.5-flash": ModelPrice(
+        0.30, 2.50, billed=False,
+        source_url=_GEMINI_PRICING, fetched_date=_FETCHED,
+        second_source_url=_VERTEX_PRICING,
+    ),
+    "gemini-3.5-flash-lite": ModelPrice(
+        0.30, 2.50, billed=False,
+        source_url=_GEMINI_PRICING, fetched_date=_FETCHED,
+        second_source_url=_VERTEX_PRICING,
+    ),
+
+    # ── Groq (FREE TIER ile kosuluyor) ──────────────────────────────────────
+    # gpt-oss acik agirlikli modeller: liste fiyati SAGLAYICIYA GORE DEGISIR.
+    # Burada Groq'un kendi yayinladigi oran kullanilir; baska saglayicilarin
+    # ayni modeli daha ucuza sunmasi bu tutari gecersiz kilmaz.
+    "openai/gpt-oss-120b": ModelPrice(
+        0.15, 0.60, billed=False,
+        source_url=_GROQ_PRICING, fetched_date=_FETCHED,
+    ),
+    "openai/gpt-oss-20b": ModelPrice(
+        0.075, 0.30, billed=False,
+        source_url=_GROQ_PRICING, fetched_date=_FETCHED,
+    ),
+}
 
 
 def price_table_ready() -> bool:

@@ -23,12 +23,13 @@ class _FakeLedger:
 @pytest.fixture
 def armed(monkeypatch):
     """Fiyat tablosu doluymus gibi davran (sigorta silahlanmis olsun)."""
-    price = pricing.ModelPrice(1.0, 1.0, billed=True, source_url="test", fetched_on="2026-09-28")
+    price = pricing.ModelPrice(1.0, 1.0, billed=True, source_url="test", fetched_date="2026-09-28")
     monkeypatch.setattr(pricing, "PRICE_TABLE", {"m": price})
 
 
-def test_guard_is_inert_without_price_table(caplog):
+def test_guard_is_inert_without_price_table(caplog, monkeypatch):
     """Fiyat tablosu bossa sigorta ATIL olmali ve bunu ACIKCA soylemeli."""
+    monkeypatch.setattr(pricing, "PRICE_TABLE", {})
     ledger = _FakeLedger(1000.0)
     with caplog.at_level(logging.WARNING):
         guard = BudgetGuard(ledger)
@@ -108,7 +109,7 @@ def test_real_ledger_spend_drives_the_guard(tmp_path, monkeypatch):
     from call_ledger import CallLedger
     from models import TokenUsage
 
-    price = pricing.ModelPrice(1000.0, 1000.0, billed=True, source_url="t", fetched_on="2026-09-28")
+    price = pricing.ModelPrice(1000.0, 1000.0, billed=True, source_url="t", fetched_date="2026-09-28")
     monkeypatch.setattr(pricing, "PRICE_TABLE", {"m": price})
     ledger = CallLedger(str(tmp_path), run_id="r")
     guard = BudgetGuard(ledger)
@@ -162,7 +163,7 @@ def test_resumed_run_counts_previous_spend(tmp_path, monkeypatch):
     from call_ledger import CallLedger
     from models import TokenUsage
 
-    price = pricing.ModelPrice(1000.0, 1000.0, billed=True, source_url="t", fetched_on="2026-09-28")
+    price = pricing.ModelPrice(1000.0, 1000.0, billed=True, source_url="t", fetched_date="2026-09-28")
     monkeypatch.setattr(pricing, "PRICE_TABLE", {"m": price})
     usage = TokenUsage(input_tokens=20_000, output_tokens=20_000, split_available=True)
 
