@@ -378,7 +378,14 @@ def summarize_by_generator(records: list[dict]) -> list[dict]:
             "reasoning_tokens": sum(int(r.get("reasoning_tokens") or 0) for r in api_calls),
             "billable_output_tokens": sum(int(r.get("billable_output_tokens") or 0) for r in api_calls),
             "total_tokens": sum(int(r.get("total_tokens") or 0) for r in api_calls),
-            "token_split_available": all(bool(r.get("split_available")) for r in api_calls) if api_calls else False,
+            # Yanit alinamayan cagrilarda token zaten YOKTUR; onlari "ayrim
+            # vermedi" saymak basarili cagrilarin ayrimini gizler. Olcut,
+            # gercekten yanit donen cagrilar uzerinden degerlendirilir.
+            "token_split_available": (
+                all(bool(r.get("split_available")) for r in responded)
+                if (responded := [r for r in api_calls if not r.get("failed")])
+                else False
+            ),
             **{f"spend_{key}": value for key, value in total_spend(items).items()},
         })
     return summary

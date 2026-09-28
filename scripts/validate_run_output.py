@@ -268,26 +268,46 @@ def check_tokens(
         ledger_by_op[key] += _to_int(record.get("total_tokens")) or 0
 
     if ledger_by_op:
-        mismatches: list[str] = []
+        # YON ONEMLI:
+        #   CSV > defter  -> K4 SISME. Satirlara gercekte harcanmayan token
+        #                    yazilmis demektir; bu bir HATADIR.
+        #   CSV < defter  -> BOSA GIDEN CAGRI. Cokme/resume, iptal edilen nesil
+        #                    veya elenen repair ciktisi yuzunden para harcanmis
+        #                    ama satir hayatta kalmamistir. Bu BEKLENEN bir
+        #                    durumdur ve gizlenmemeli, OLCULMELIDIR.
+        inflated: list[str] = []
+        wasted_tokens = 0
+        wasted_groups = 0
         for key, ledger_total in sorted(ledger_by_op.items()):
             if not ledger_total:
                 continue
             csv_total = csv_by_op.get(key, 0)
-            if csv_total != ledger_total:
-                ratio = (csv_total / ledger_total) if ledger_total else 0
-                mismatches.append(
-                    f"{key[0]}/{key[1]}: CSV {csv_total} != defter {ledger_total} ({ratio:.2f}x)"
+            if csv_total > ledger_total:
+                ratio = csv_total / ledger_total
+                inflated.append(
+                    f"{key[0]}/{key[1]}: CSV {csv_total} > defter {ledger_total} ({ratio:.2f}x)"
                 )
-        if mismatches:
-            preview = "; ".join(mismatches[:3])
-            suffix = " ..." if len(mismatches) > 3 else ""
+            elif csv_total < ledger_total:
+                wasted_groups += 1
+                wasted_tokens += ledger_total - csv_total
+
+        if inflated:
+            preview = "; ".join(inflated[:3])
+            suffix = " ..." if len(inflated) > 3 else ""
             findings.add(
                 "KRITIK",
-                f"{len(mismatches)} (generator, operation_id) grubunda CSV satirlarinin "
-                f"tokens_used toplami defterdeki gercek token sayisina esit degil "
-                f"(K4 deseni): {preview}{suffix}",
+                f"{len(inflated)} (generator, operation_id) grubunda CSV satirlarinin "
+                f"tokens_used toplami defterdeki gercek token sayisini ASIYOR "
+                f"(K4 sisme deseni): {preview}{suffix}",
             )
-        else:
+        if wasted_groups:
+            findings.add(
+                "BILGI",
+                f"Bosa giden uretim: {wasted_groups} grupta defterdeki {wasted_tokens} token "
+                f"hicbir CSV satirina karsilik gelmiyor (cokme/resume, iptal edilen nesil "
+                f"veya elenen repair ciktisi). Para harcanmis, satir hayatta kalmamis.",
+            )
+        if not inflated and not wasted_groups:
             findings.add(
                 "BILGI",
                 f"K4 kontrolu: {len(ledger_by_op)} grupta CSV satir toplami defterle BIREBIR tutuyor.",
