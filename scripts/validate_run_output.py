@@ -28,7 +28,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
@@ -307,12 +306,27 @@ def check_status_sanity(rows: list[dict], fieldnames: list[str], executed: bool,
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run sonrasi CSV cikti dogrulamasi.")
-    parser.add_argument("--csv", metavar="PATH", default=None, help="Denetlenecek CSV (varsayilan: outputs/ icindeki en yeni).")
+    parser.add_argument(
+        "--csv", metavar="PATH", default=None,
+        help="Denetlenecek CSV (varsayilan: outputs/ icindeki en yeni).",
+    )
     parser.add_argument("--output-dir", metavar="DIR", default=str(PROJECT_ROOT / "outputs"))
-    parser.add_argument("--expected-rows", metavar="N", type=int, default=None, help="Beklenen toplam satir sayisi (orn. 1350).")
-    parser.add_argument("--expected-generators", metavar="N", type=int, default=None, help="Beklenen generator etiketi sayisi (orn. 9).")
-    parser.add_argument("--expected-per-generator", metavar="N", type=int, default=None, help="Generator basina beklenen test sayisi (orn. 150).")
-    parser.add_argument("--tolerance", metavar="R", type=float, default=0.02, help="Dengeleme toleransi (varsayilan 0.02 = %%2).")
+    parser.add_argument(
+        "--expected-rows", metavar="N", type=int, default=None,
+        help="Beklenen toplam satir sayisi (orn. 1350).",
+    )
+    parser.add_argument(
+        "--expected-generators", metavar="N", type=int, default=None,
+        help="Beklenen generator etiketi sayisi (orn. 9).",
+    )
+    parser.add_argument(
+        "--expected-per-generator", metavar="N", type=int, default=None,
+        help="Generator basina beklenen test sayisi (orn. 150).",
+    )
+    parser.add_argument(
+        "--tolerance", metavar="R", type=float, default=0.02,
+        help="Dengeleme toleransi (varsayilan 0.02 = %%2).",
+    )
     parser.add_argument("--executed", action="store_true", help="url/actual_status/pass kolonlarini da zorunlu dene.")
     return parser.parse_args(argv)
 
