@@ -510,6 +510,10 @@ def _apply_token_tracking(rows: List[Dict], total_tokens: int) -> None:
     sum(row["tokens_used"]) == total_tokens her zaman saglanir.
 
     Tek satirli durumda (smoke test) sonuc degismez: satira toplamin tamami yazilir.
+
+    RAPORLAMA UYARISI: bu deger bir TAHSIStir, olcum degildir. Tek bir test
+    senaryosunun gercek token maliyeti bilinemez — olcum cagri duzeyindedir.
+    Tek gecerli kaynak cagri defteridir.
     """
     if not rows:
         return

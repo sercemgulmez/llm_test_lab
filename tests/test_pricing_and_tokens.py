@@ -206,3 +206,13 @@ def test_unverified_entries_are_reported():
     """'verified=False' isaretli girdi varsa bu test onu gorunur kilar."""
     unverified = sorted(m for m, p in pricing.PRICE_TABLE.items() if not p.verified)
     assert not unverified, f"DOGRULANMAMIS fiyat girdisi: {unverified}"
+
+
+def test_reports_state_that_tokens_used_is_allocated_not_measured():
+    """Raporlar satir basi token'in TAHSIS oldugunu acikca soylemeli."""
+    from reporters.csv_reporter import TOKEN_ALLOCATION_NOTE
+
+    note = TOKEN_ALLOCATION_NOTE.lower()
+    assert "tahsis" in note
+    assert "olculmemistir" in note or "olcum degil" in note
+    assert "defter" in note
