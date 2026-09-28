@@ -543,16 +543,30 @@ class BaseGenerator(ABC):
         variant_name: str,
         variant_desc: str,
         num_cases: int,
+        num_cases_by_op: Optional[Dict[str, int]] = None,
     ) -> List[Dict]:
-        """Verilen operasyonlar icin test senaryolarini paralel olarak uretir."""
+        """Verilen operasyonlar icin test senaryolarini paralel olarak uretir.
+
+        `num_cases_by_op` verilirse her operasyon icin ayri bir testcase sayisi
+        kullanilir (generator basina toplami tam tutturmak icin; bkz. K1).
+        Verilmezse tum operasyonlar icin `num_cases` gecerlidir.
+        """
         if not operations or self._aborted:
             return []
         self._generation_summaries = []
+
+        def _count_for(op: ApiOperation) -> int:
+            if num_cases_by_op is None:
+                return num_cases
+            return num_cases_by_op.get(op.op_id, num_cases)
+
         workers = min(MAX_PARALLEL_WORKERS, len(operations))
         with ThreadPoolExecutor(max_workers=workers) as executor:
             results = list(
                 executor.map(
-                    lambda op: self._generate_for_operation_with_retry(op, variant_name, variant_desc, num_cases),
+                    lambda op: self._generate_for_operation_with_retry(
+                        op, variant_name, variant_desc, _count_for(op)
+                    ),
                     operations,
                 )
             )

@@ -82,7 +82,7 @@ class GeminiGenerator(BaseGenerator):
         num_cases: int,
     ) -> List[Dict]:
         client = self._get_client()
-        generator_name = f"LLM-Gemini-{self.model}-{variant_name}"
+        generator_name = f"LLM-Gemini-{self.model}"
         _logger.info("[Gemini - %s - %s] %s (%s %s) üretiliyor...", self.model, variant_name, op.op_id, op.method, op.path)
 
         def request_completion(prompt: str) -> tuple[str, int]:

@@ -365,6 +365,18 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--tests-per-generator",
+        metavar="N",
+        type=int,
+        default=None,
+        help=(
+            "Her generator'in TOPLAM uretecegi test sayisi (orn. 150). Verilirse "
+            "--num-cases yok sayilir; sayi operasyonlara (ve LLM'lerde prompt "
+            "variant'lara) bolunur, boylece her generator etiketi tam N satir uretir. "
+            "Tam bolunmezse kalan operasyonlara dagitilir; dagitilamazsa kosu durur."
+        ),
+    )
+    parser.add_argument(
         "--resume",
         metavar="RUN_ID",
         default=None,
@@ -495,6 +507,62 @@ def _build_llm_generators(selected_keys: list = None, variant_filter: str = "bot
                 continue
             generators.append((cls(model), v_name, v_desc["focus"]))
     return generators
+
+
+def _split_total(total: int, parts: int) -> list[int]:
+    """`total`'i `parts` parcaya bolerek dagitir; toplam TAM `total` kalir.
+
+    Tam bolunmedigi durumda kalan, ilk parcalara birer birer eklenir.
+    """
+    if parts <= 0:
+        raise ValueError("Bolunecek parca sayisi pozitif olmali.")
+    base, remainder = divmod(total, parts)
+    return [base + (1 if index < remainder else 0) for index in range(parts)]
+
+
+def _allocate_cases_per_operation(total: int, operations: list) -> dict:
+    """Bir generator gorevinin `total` testini operasyonlara dagitir."""
+    op_count = len(operations)
+    if op_count == 0:
+        raise ValueError("Dagitilacak operasyon yok.")
+    if total < op_count:
+        raise ValueError(
+            f"Gorev basina {total} test {op_count} operasyona dagitilamiyor: "
+            f"her operasyona en az 1 test dusmeli."
+        )
+    shares = _split_total(total, op_count)
+    return {op.op_id: share for op, share in zip(operations, shares)}
+
+
+def _build_balanced_allocation(tests_per_generator: int, operations: list, variants: list) -> dict:
+    """K1: her generator etiketi TAM `tests_per_generator` satir uretsin.
+
+    LLM generator'lari her prompt variant icin ayri bir gorev kosar ama CSV'de
+    tek etikette birlesir; bu yuzden hedef once variant'lara, sonra
+    operasyonlara bolunur. Traditional'in variant'i yoktur.
+
+    Doner: {"traditional": {op_id: n}, "llm": {variant_name: {op_id: n}}}
+    """
+    variant_count = len(variants)
+    if variant_count == 0:
+        raise ValueError("En az bir prompt variant secilmeli.")
+    op_count = len(operations)
+    minimum = variant_count * op_count
+    if tests_per_generator < minimum:
+        raise ValueError(
+            f"--tests-per-generator {tests_per_generator} cok dusuk: "
+            f"{variant_count} prompt variant x {op_count} operasyon = en az {minimum} gerekir "
+            f"(her variant-operasyon ciftine en az 1 test dusmeli)."
+        )
+
+    variant_totals = _split_total(tests_per_generator, variant_count)
+    return {
+        "traditional": _allocate_cases_per_operation(tests_per_generator, operations),
+        "llm": {
+            variant: _allocate_cases_per_operation(variant_total, operations)
+            for variant, variant_total in zip(variants, variant_totals)
+        },
+    }
 
 
 def _generation_task_key(gen_instance, variant_name: str) -> str:
@@ -699,6 +767,29 @@ def main() -> None:
         _logger.info("  [checkpoint] run_id=%s — surdurmek icin: --resume %s",
                      run_checkpoint.run_id, run_checkpoint.run_id)
 
+    # ── K1: generator basina dengeli tahsis ────────────────────────────
+    prompt_variant_filter = getattr(args, "prompt_variant", "both")
+    active_variants = [
+        name for name in config.PROMPT_VARIANTS
+        if prompt_variant_filter == "both" or name == prompt_variant_filter
+    ]
+    tests_per_generator = getattr(args, "tests_per_generator", None)
+    allocation = None
+    if tests_per_generator:
+        try:
+            allocation = _build_balanced_allocation(tests_per_generator, operations, active_variants)
+        except ValueError as exc:
+            _logger.error("HATA: dengeli tahsis kurulamadi — %s", exc)
+            sys.exit(1)
+        llm_per_variant = {v: sum(counts.values()) for v, counts in allocation["llm"].items()}
+        _logger.info(
+            "  [denge] generator basina hedef %d | Traditional %d | LLM variant dagilimi %s (toplam %d)",
+            tests_per_generator,
+            sum(allocation["traditional"].values()),
+            llm_per_variant,
+            sum(llm_per_variant.values()),
+        )
+
     generation_started_at = time.perf_counter()
     executed_rows: list = []
     run_failure: Exception | None = None
@@ -711,14 +802,16 @@ def main() -> None:
                 _logger.info("  [Geleneksel] checkpoint'te tamamlanmis, atlandi.")
             else:
                 trad_gen = TraditionalGenerator()
-                trad_rows = trad_gen.generate(operations, "", "", num_cases)
+                trad_rows = trad_gen.generate(
+                    operations, "", "", num_cases,
+                    num_cases_by_op=(allocation["traditional"] if allocation else None),
+                )
                 all_rows.extend(trad_rows)
                 run_checkpoint.record_generated(trad_rows, "traditional")
                 run_checkpoint.mark_task_done("traditional", len(trad_rows))
                 _logger.info("  [Geleneksel] %d senaryo üretildi.", len(trad_rows))
 
         # LLM tabanlı generator'lar — dış döngü paralelliği (generator başına bir thread)
-        prompt_variant_filter = getattr(args, "prompt_variant", "both")
         llm_generators = _build_llm_generators(selected_keys, prompt_variant_filter)
         with ThreadPoolExecutor(max_workers=config.MAX_PARALLEL_GENERATORS) as executor:
             future_to_task = {}
@@ -742,11 +835,12 @@ def main() -> None:
                     variant_name=v_name,
                     variant_desc=v_desc,
                     num_cases=num_cases,
+                    num_cases_by_op=(allocation["llm"].get(v_name) if allocation else None),
                 )
-                future_to_task[future] = (gen_label, task_key)
+                future_to_task[future] = (gen_label, task_key, v_name)
 
             for future in as_completed(future_to_task):
-                gen_label, task_key = future_to_task[future]
+                gen_label, task_key, task_variant = future_to_task[future]
                 try:
                     rows = future.result()
                     all_rows.extend(rows)
@@ -755,7 +849,10 @@ def main() -> None:
                     _logger.info("  [%s] %d senaryo üretildi.", gen_label, len(rows))
                 except Exception as exc:  # noqa: BLE001 - tek generator tum kosuyu oldurmemeli
                     # Bu gorevin uretmesi beklenen satir sayisi = kaybedilen satir sayisi.
-                    lost_rows = num_cases * len(operations)
+                    if allocation and task_variant in allocation["llm"]:
+                        lost_rows = sum(allocation["llm"][task_variant].values())
+                    else:
+                        lost_rows = num_cases * len(operations)
                     failed_generations.append({
                         "generator": gen_label,
                         "error_type": type(exc).__name__,
