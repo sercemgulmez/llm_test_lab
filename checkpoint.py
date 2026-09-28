@@ -36,6 +36,10 @@ IDENTITY_COLUMNS: Tuple[str, ...] = ("generator", "prompt_variant", "tc_id")
 
 # Satirin hangi uretim gorevine ait oldugunu tutan dahili alan (CSV'ye sizmaz).
 TASK_FIELD = "_checkpoint_task"
+# Gorevin kacinci kosusunda uretildigi. Yeniden kosulan gorevin ESKI satirlari
+# append-only dosyada durmaya devam eder; bu damga olmadan gorev yeniden
+# tamamlandiginda eski satirlar da geri yuklenir ve duplicate uretir.
+EPOCH_FIELD = "_checkpoint_epoch"
 
 
 def row_identity(row: Dict[str, Any]) -> Tuple[str, ...]:
@@ -135,15 +139,30 @@ class RunCheckpoint:
         """
         if not self.enabled:
             return []
-        done = self.completed_tasks()
+        task_records = self.task_records()
         rows: List[dict] = []
         orphaned = 0
+        stale = 0
         for record in self._generation.load():
-            if str(record.get(TASK_FIELD, "")) not in done:
+            task_key = str(record.get(TASK_FIELD, ""))
+            task = task_records.get(task_key)
+            if task is None:
                 orphaned += 1
                 continue
-            row = {key: value for key, value in record.items() if key != TASK_FIELD}
+            # Yeniden kosulan gorevin ONCEKI nesil satirlari atilir: yeniden kosu
+            # kismi birlestirme degil TAM DEGISTIRMEDIR.
+            if int(record.get(EPOCH_FIELD, 0) or 0) != int(task.get("retry_count") or 0):
+                stale += 1
+                continue
+            row = {
+                key: value for key, value in record.items()
+                if key not in (TASK_FIELD, EPOCH_FIELD)
+            }
             rows.append(row)
+        if stale:
+            _logger.info(
+                "  [checkpoint] %d eski nesil satir atlandi (yeniden kosulan gorevler).", stale,
+            )
         if orphaned:
             _logger.warning(
                 "  [checkpoint] %d yetim satir atlandi (gorevi tamamlanmamis); "
@@ -151,24 +170,65 @@ class RunCheckpoint:
             )
         return rows
 
-    def completed_tasks(self) -> Set[str]:
+    def task_records(self) -> Dict[str, dict]:
+        """Gorev anahtari -> son gecerli kayit. Iptal edilen gorevler DUSER."""
         if not self.enabled:
-            return set()
-        return {
-            str(record.get("task", ""))
-            for record in self._tasks.load()
-            if record.get("task")
-        }
+            return {}
+        records: Dict[str, dict] = {}
+        for record in self._tasks.load():
+            key = str(record.get("task", ""))
+            if not key:
+                continue
+            if record.get("revoked"):
+                records.pop(key, None)
+            else:
+                records[key] = record
+        return records
 
-    def record_generated(self, rows: Iterable[dict], task_key: str) -> None:
-        """Satirlari, ait olduklari gorev anahtariyla etiketleyerek yazar."""
+    def completed_tasks(self) -> Set[str]:
+        return set(self.task_records())
+
+    def revoke_task(self, task_key: str, reason: str = "") -> None:
+        """Gorevi 'tamamlanmadi' haline getirir.
+
+        Satirlari silmeye gerek yoktur: load_generated_rows() yalnizca
+        TAMAMLANMIS gorevlerin satirlarini yukledigi icin iptal edilen gorevin
+        satirlari yetim kalir ve resume'da otomatik olarak atilir. Boylece
+        yeniden kosu KISMI BIRLESTIRME degil TAM DEGISTIRME olur.
+        """
         if self.enabled:
-            self._generation.extend({**row, TASK_FIELD: task_key} for row in rows)
+            self._tasks.append({"task": task_key, "revoked": True, "reason": reason})
 
-    def mark_task_done(self, task_key: str, row_count: int) -> None:
+    def record_generated(self, rows: Iterable[dict], task_key: str, epoch: int = 0) -> None:
+        """Satirlari gorev anahtari VE nesil damgasiyla etiketleyerek yazar."""
+        if self.enabled:
+            self._generation.extend(
+                {**row, TASK_FIELD: task_key, EPOCH_FIELD: epoch} for row in rows
+            )
+
+    def mark_task_done(
+        self,
+        task_key: str,
+        row_count: int,
+        fallback_cases: int = 0,
+        failure_origin: Optional[str] = None,
+        retry_count: int = 0,
+    ) -> None:
+        """Gorevi tamamlanmis olarak isaretler.
+
+        TAMAMLANMA SEMANTIGI DEGISMEZ: fallback iceren gorev de tamamlanmis
+        sayilir. Ek alanlar yalnizca sonradan "hangi gorev altyapi hatasi
+        yuzunden kirlendi" sorusunu cevaplayabilmek icindir.
+        """
         if self.enabled:
             self._generation.flush()  # gorev tamamlandi olarak isaretlenmeden once satirlar diskte olsun
-            self._tasks.append({"task": task_key, "rows": row_count})
+            self._tasks.append({
+                "task": task_key,
+                "rows": row_count,
+                "fallback_cases": fallback_cases,
+                "failure_origin": failure_origin,
+                "retry_count": retry_count,
+            })
 
     # ── Yurutme fazi ─────────────────────────────────────────────────────
 

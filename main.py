@@ -383,6 +383,25 @@ def parse_args() -> argparse.Namespace:
         help=f"Kac satirda bir checkpoint diske yazilsin (varsayilan {DEFAULT_FLUSH_EVERY}).",
     )
     parser.add_argument(
+        "--retry-infra-fallback",
+        action="store_true",
+        help=(
+            "--resume ile birlikte: ALTYAPI kaynakli fallback iceren gorevleri "
+            "(429, kota, timeout, ag) bir kez yeniden kosar. Icerik kaynakli "
+            "fallback'e DOKUNMAZ. Gorev basina en fazla 1 yeniden kosu yapilir "
+            "ve gorevin tum eski satirlari degistirilir (kismi birlestirme yok)."
+        ),
+    )
+    parser.add_argument(
+        "--confirm-paid-retry",
+        action="store_true",
+        help=(
+            "Ucretli saglayicilarda (OpenAI, Claude) yeniden kosuya ACIK ONAY. "
+            "Bu bayrak verilmezse ucretli gorevler yeniden kosulmaz; tahmin "
+            "gosterilir ve kosu durur."
+        ),
+    )
+    parser.add_argument(
         "--no-call-ledger",
         action="store_true",
         help="Cagri defterini kapatir (ham yanit/istek/token kaydi yazilmaz).",
@@ -501,6 +520,28 @@ def _build_llm_generators(selected_keys: list = None, variant_filter: str = "bot
                 continue
             generators.append((cls(model), v_name, v_desc["focus"]))
     return generators
+
+
+def _task_provider(task_key: str) -> str:
+    """'OpenAIGenerator:gpt-4.1|basic' -> 'OpenAI'"""
+    class_name = task_key.split(":", 1)[0]
+    return class_name[:-len("Generator")] if class_name.endswith("Generator") else class_name
+
+
+def _task_is_paid(task_key: str) -> bool:
+    return _task_provider(task_key) in config.PAID_PROVIDERS
+
+
+def _infra_fallback_candidates(task_records: dict) -> list:
+    """Altyapi kaynakli fallback iceren ve henuz yeniden kosulmamis gorevler."""
+    candidates = []
+    for task_key, record in sorted(task_records.items()):
+        if record.get("failure_origin") not in ("altyapi", "karma"):
+            continue
+        if int(record.get("retry_count") or 0) >= 1:
+            continue  # gorev basina en fazla 1 yeniden kosu
+        candidates.append((task_key, record))
+    return candidates
 
 
 def _generation_task_key(gen_instance, variant_name: str) -> str:
@@ -702,7 +743,47 @@ def main() -> None:
     if call_ledger.enabled:
         _logger.info("  [defter] cagri kaydi: %s", call_ledger.path)
 
-    completed_tasks = run_checkpoint.completed_tasks()
+    task_records = run_checkpoint.task_records()
+    retry_counts: dict = {}
+
+    if getattr(args, "retry_infra_fallback", False):
+        if not run_checkpoint.resumed:
+            _logger.error("HATA: --retry-infra-fallback yalnizca --resume ile kullanilir.")
+            sys.exit(1)
+        candidates = _infra_fallback_candidates(task_records)
+        for key, rec in sorted(task_records.items()):
+            if rec.get("failure_origin") in ("altyapi", "karma") and int(rec.get("retry_count") or 0) >= 1:
+                _logger.warning("  [yeniden kosu] %s daha once bir kez yeniden kosuldu, ATLANDI.", key)
+
+        if not candidates:
+            _logger.info("  [yeniden kosu] altyapi kaynakli fallback iceren yeniden kosulabilir gorev yok.")
+        else:
+            paid = [(k, r) for k, r in candidates if _task_is_paid(k)]
+            free = [(k, r) for k, r in candidates if not _task_is_paid(k)]
+            _logger.info("  [yeniden kosu] aday gorev: %d (ucretsiz %d, UCRETLI %d)",
+                         len(candidates), len(free), len(paid))
+            for key, record in candidates:
+                _logger.info(
+                    "      %s | saglayici=%s | ucretli=%s | fallback=%s satir",
+                    key, _task_provider(key), "EVET" if _task_is_paid(key) else "hayir",
+                    record.get("fallback_cases"),
+                )
+            if paid and not getattr(args, "confirm_paid_retry", False):
+                _logger.error(
+                    "\n  UCRETLI yeniden kosu ONAY BEKLIYOR: %d gorev PARA HARCAR.\n"
+                    "  Tahmini ek cagri: %d gorev x %d operasyon = %d ana cagri.\n"
+                    "  (Birim maliyet fiyat tablosu onaylandiktan sonra hesaplanacak.)\n"
+                    "  Onaylamak icin --confirm-paid-retry ekleyin; onaysiz kosu DURDURULDU.",
+                    len(paid), len(paid), len(operations), len(paid) * len(operations),
+                )
+                sys.exit(2)
+            for key, record in candidates:
+                retry_counts[key] = int(record.get("retry_count") or 0) + 1
+                run_checkpoint.revoke_task(key, reason="altyapi kaynakli fallback yeniden kosuluyor")
+                task_records.pop(key, None)
+            _logger.info("  [yeniden kosu] %d gorev iptal edildi, satirlari degistirilecek.", len(candidates))
+
+    completed_tasks = set(task_records)
     if run_checkpoint.resumed:
         resumed_rows = run_checkpoint.load_generated_rows()
         all_rows.extend(resumed_rows)
@@ -729,7 +810,7 @@ def main() -> None:
                 trad_rows = trad_gen.generate(operations, "", "", num_cases)
                 all_rows.extend(trad_rows)
                 run_checkpoint.record_generated(trad_rows, "traditional")
-                run_checkpoint.mark_task_done("traditional", len(trad_rows))
+                run_checkpoint.mark_task_done("traditional", len(trad_rows), fallback_cases=0)
                 _logger.info("  [Geleneksel] %d senaryo üretildi.", len(trad_rows))
 
         # LLM tabanlı generator'lar — dış döngü paralelliği (generator başına bir thread)
@@ -759,15 +840,28 @@ def main() -> None:
                     variant_desc=v_desc,
                     num_cases=num_cases,
                 )
-                future_to_task[future] = (gen_label, task_key)
+                future_to_task[future] = (gen_label, task_key, gen_instance)
 
             for future in as_completed(future_to_task):
-                gen_label, task_key = future_to_task[future]
+                gen_label, task_key, gen_instance = future_to_task[future]
                 try:
                     rows = future.result()
                     all_rows.extend(rows)
-                    run_checkpoint.record_generated(rows, task_key)
-                    run_checkpoint.mark_task_done(task_key, len(rows))
+                    run_checkpoint.record_generated(rows, task_key, epoch=retry_counts.get(task_key, 0))
+                    summaries = getattr(gen_instance, "_generation_summaries", []) or []
+                    fallback_total = sum(int(item.get("fallback_cases") or 0) for item in summaries)
+                    origins = {item.get("fallback_origin") for item in summaries if item.get("fallback_origin")}
+                    if getattr(gen_instance, "_infra_failures", 0):
+                        # Gorev hic satir uretemeden coktuyse fallback de yoktur;
+                        # yine de ALTYAPI kaynakli sayilir ve yeniden kosulabilir.
+                        origins.add("altyapi")
+                    origin = "karma" if len(origins) > 1 else next(iter(origins), None)
+                    run_checkpoint.mark_task_done(
+                        task_key, len(rows),
+                        fallback_cases=fallback_total,
+                        failure_origin=origin,
+                        retry_count=retry_counts.get(task_key, 0),
+                    )
                     _logger.info("  [%s] %d senaryo üretildi.", gen_label, len(rows))
                 except Exception as exc:  # noqa: BLE001 - tek generator tum kosuyu oldurmemeli
                     # Bu gorevin uretmesi beklenen satir sayisi = kaybedilen satir sayisi.
