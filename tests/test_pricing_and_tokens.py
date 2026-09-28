@@ -216,3 +216,55 @@ def test_reports_state_that_tokens_used_is_allocated_not_measured():
     assert "tahsis" in note
     assert "olculmemistir" in note or "olcum degil" in note
     assert "defter" in note
+
+
+# ── K4 kontrolunun YONU ───────────────────────────────────────────────────
+
+def _run_check_tokens(rows, ledger_records):
+    import sys
+    sys.path.insert(0, "scripts")
+    from scripts.validate_run_output import Findings, check_tokens
+
+    findings = Findings()
+    check_tokens(rows, ["generator", "operation_id", "tokens_used"], findings, ledger_records)
+    return findings
+
+
+def _csv_rows(generator, op, values):
+    return [{"generator": generator, "operation_id": op, "tokens_used": v} for v in values]
+
+
+def _ledger(generator, op, total):
+    return [{"generator": generator, "operation_id": op, "call_type": "ana", "total_tokens": total}]
+
+
+def test_csv_exceeding_ledger_is_critical():
+    """K4 sismesi: satirlara gercekte harcanmayan token yazilmis."""
+    findings = _run_check_tokens(_csv_rows("G", "EP1", [1200] * 5), _ledger("G", "EP1", 1200))
+    assert any("ASIYOR" in item for item in findings.critical)
+
+
+def test_csv_below_ledger_is_reported_as_waste_not_error():
+    """Cokme/resume sonrasi bosa giden cagri KRITIK degil, OLCULEN bir bilgidir."""
+    findings = _run_check_tokens(_csv_rows("G", "EP1", [240] * 5), _ledger("G", "EP1", 2400))
+    assert findings.critical == []
+    assert any("Bosa giden uretim" in item for item in findings.info)
+    assert any("1200 token" in item for item in findings.info)
+
+
+def test_exact_match_is_clean():
+    findings = _run_check_tokens(_csv_rows("G", "EP1", [240] * 5), _ledger("G", "EP1", 1200))
+    assert findings.critical == []
+    assert any("BIREBIR" in item for item in findings.info)
+
+
+def test_failed_calls_do_not_hide_token_split():
+    """Yanit alinamayan cagri, basarili cagrilarin token ayrimini gizlememeli."""
+    from call_ledger import summarize_by_generator
+
+    records = [
+        {"generator": "G", "call_type": "ana", "split_available": True, "accepted_cases": 5},
+        {"generator": "G", "call_type": "ana", "failed": True, "split_available": False},
+    ]
+    summary = summarize_by_generator(records)[0]
+    assert summary["token_split_available"] is True
