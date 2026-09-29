@@ -52,11 +52,41 @@ def test_effective_limits_apply_safety_factor():
 
 # ── free_tier_limits.json ────────────────────────────────────────────────
 
-def test_repo_limits_file_is_schema_only():
-    """Repodaki dosya SEMA'dir; degerler kullanicidan gelir."""
-    gaps = rate_limiter.missing_fields()
-    assert gaps, "degerler repoya yazilmamali"
-    assert rate_limiter.load_limits() == {}, "eksik alanli model yuklenmemeli"
+def test_repo_limits_file_covers_every_free_only_model():
+    """Dosya, FREE_ONLY her model icin yayimlanan limitleri tasimali."""
+    import config
+    from generators import GENERATOR_REGISTRY
+
+    limits = rate_limiter.load_limits()
+    expected = {
+        (provider, model)
+        for _k, (_c, model, provider) in GENERATOR_REGISTRY.items()
+        if model is not None and provider in config.FREE_ONLY_PROVIDERS
+    }
+    assert set(limits) == expected
+    assert rate_limiter.missing_fields() == {}, "zorunlu alanlarin hepsi dolu olmali"
+
+
+def test_unknown_tpd_is_not_treated_as_unlimited():
+    """Gemini gunluk token limitini yayimlamiyor: BILINMIYOR, sinirsiz DEGIL."""
+    limits = rate_limiter.load_limits()
+    gemini = limits[("Gemini", "gemini-2.5-flash")]
+    assert gemini.published_tpd is None
+    assert gemini.tpd_known is False
+    assert gemini.effective_tpd is None, "None = bilinmiyor; buyuk bir sayi UYDURULMAZ"
+    groq = limits[("Groq", "openai/gpt-oss-20b")]
+    assert groq.tpd_known is True
+    assert groq.effective_tpd == int(groq.published_tpd * groq.safety_factor)
+
+
+def test_unknown_tpd_does_not_block_reservations():
+    """TPD bilinmiyorken limitor TPD penceresi uygulamaz ama calismaya devam eder."""
+    key = ("Gemini", "gemini-2.5-flash")
+    limits = {key: ModelLimits(*key, 15, 10, 250_000, None, 1.0, "input_only")}
+    limiter = RateLimiter(limits)
+    reservation = limiter.reserve(*key, 500, 8192)
+    assert reservation.tokens == 500
+    limiter.settle(reservation, actual_tokens=500)
 
 
 def test_partially_filled_model_is_not_loaded(tmp_path):

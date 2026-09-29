@@ -39,7 +39,10 @@ USAGE_DIR_NAME = ".limits"
 MINUTE_S = 60.0
 DAY_S = 24 * 60 * 60.0
 
-REQUIRED_FIELDS = ("published_rpm", "published_rpd", "published_tpm", "published_tpd")
+# published_tpd BILEREK zorunlu DEGIL: bazi saglayicilar gunluk token limitini
+# yayimlamiyor. Bilinmiyorsa None kalir ve SINIRSIZ SAYILMAZ (bkz. ModelLimits).
+REQUIRED_FIELDS = ("published_rpm", "published_rpd", "published_tpm")
+OPTIONAL_FIELDS = ("published_tpd",)
 
 
 class MissingRateLimits(RuntimeError):
@@ -57,7 +60,7 @@ class ModelLimits:
     published_rpm: int
     published_rpd: int
     published_tpm: int
-    published_tpd: int
+    published_tpd: Optional[int]   # None = saglayici yayimlamamis, BILINMIYOR
     safety_factor: float
     tpm_counts: str  # "total" | "input_only"
 
@@ -77,7 +80,19 @@ class ModelLimits:
         return self._effective(self.published_tpm)
 
     @property
-    def effective_tpd(self) -> int:
+    def tpd_known(self) -> bool:
+        return self.published_tpd is not None
+
+    @property
+    def effective_tpd(self) -> Optional[int]:
+        """Gunluk token limiti. BILINMIYORSA None doner — SINIRSIZ DEMEK DEGILDIR.
+
+        Limitor bu durumda TPD penceresi uygulayamaz; saglayici yayimlanmamis
+        bir gunluk limit uygularsa bunu ancak 429 ile ogreniriz. O yol da
+        muhafazakar davranir (kota turu ayirt edilemezse GUN kabul edilir).
+        """
+        if self.published_tpd is None:
+            return None
         return self._effective(self.published_tpd)
 
     def to_dict(self) -> dict:
@@ -88,12 +103,13 @@ class ModelLimits:
             "published_rpd": self.published_rpd,
             "published_tpm": self.published_tpm,
             "published_tpd": self.published_tpd,
+            "tpd_known": self.tpd_known,
             "safety_factor": self.safety_factor,
             "tpm_counts": self.tpm_counts,
             "effective_rpm": self.effective_rpm,
             "effective_rpd": self.effective_rpd,
             "effective_tpm": self.effective_tpm,
-            "effective_tpd": self.effective_tpd,
+            "effective_tpd": self.effective_tpd,  # None = bilinmiyor, sinirsiz DEGIL
         }
 
 
@@ -112,6 +128,7 @@ def load_limits(path: str | Path = LIMITS_FILE) -> Dict[Tuple[str, str], ModelLi
         for model, values in (block.get("models") or {}).items():
             if any(values.get(field_name) is None for field_name in REQUIRED_FIELDS):
                 continue
+            tpd = values.get("published_tpd")
             factor = values.get("safety_factor")
             result[(provider, model)] = ModelLimits(
                 provider=provider,
@@ -119,7 +136,7 @@ def load_limits(path: str | Path = LIMITS_FILE) -> Dict[Tuple[str, str], ModelLi
                 published_rpm=int(values["published_rpm"]),
                 published_rpd=int(values["published_rpd"]),
                 published_tpm=int(values["published_tpm"]),
-                published_tpd=int(values["published_tpd"]),
+                published_tpd=None if tpd is None else int(tpd),
                 safety_factor=float(default_factor if factor is None else factor),
                 tpm_counts=tpm_counts,
             )
@@ -380,8 +397,9 @@ class RateLimiter:
                         state.rpm.wait_for(now, 1, limits.effective_rpm),
                         state.rpd.wait_for(now, 1, limits.effective_rpd),
                         state.tpm.wait_for(now, tokens, limits.effective_tpm),
-                        state.tpd.wait_for(now, tokens, limits.effective_tpd),
                     ]
+                    if limits.effective_tpd is not None:
+                        waits.append(state.tpd.wait_for(now, tokens, limits.effective_tpd))
                     wait = max(waits)
                     if wait <= 0.0:
                         state.rpm.add(now, 1)
