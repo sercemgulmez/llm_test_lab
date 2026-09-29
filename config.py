@@ -44,6 +44,38 @@ assert TOTAL_LLM_MODELS == 8, f"Expected 8 LLM, got {TOTAL_LLM_MODELS}"
 # kosu bu ikisinde bedelsiz, asagidakilerde PARA HARCAR ve acik onay ister.
 PAID_PROVIDERS: set[str] = {"OpenAI", "Claude"}
 
+# Yalnizca FREE TIER ile kosulan saglayicilar. Bu listedeki saglayicilarda
+# fatura tutari HICBIR KOSULDA hesaplanmaz (pricing.cost_for), cost_usd_billed
+# her zaman 0.0 ve cost_basis free_tier_list_equivalent olur. Fiyat tablosuna
+# yanlislikla billed=True yazilsa bile bu liste onu gecersiz kilar.
+FREE_ONLY_PROVIDERS: set[str] = {"Gemini", "Groq"}
+
+assert not (PAID_PROVIDERS & FREE_ONLY_PROVIDERS), (
+    "Bir saglayici hem ucretli hem yalnizca-ucretsiz olamaz: "
+    f"{sorted(PAID_PROVIDERS & FREE_ONLY_PROVIDERS)}"
+)
+
+
+def provider_for_model(model: str) -> str:
+    """Model kimliginden saglayici etiketi; bilinmiyorsa bos string.
+
+    GENERATOR_REGISTRY'yi import etmeden calisir (dairesel import olmasin diye
+    model listelerine bakar).
+    """
+    if model in OPENAI_MODELS:
+        return "OpenAI"
+    if model in GEMINI_MODELS:
+        return "Gemini"
+    if model in GROQ_MODELS:
+        return "Groq"
+    if model in CLAUDE_MODELS:
+        return "Claude"
+    return ""
+
+
+def is_free_only_model(model: str) -> bool:
+    return provider_for_model(model) in FREE_ONLY_PROVIDERS
+
 # ============= BUTCE SIGORTASI (K6) =============
 # Senaryo A butcesi $80. Esikler DEFTERDEKI toplam faturalanan harcamaya gore
 # degerlendirilir (bkz. budget.py). "stop" asildiginda kalan uretim gorevleri

@@ -143,6 +143,10 @@ def test_missing_api_keys_are_skipped_with_warning_not_error(monkeypatch, caplog
 
     for env_var in ("OPENAI_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY", "ANTHROPIC_API_KEY"):
         monkeypatch.delenv(env_var, raising=False)
+    # FREE_ONLY beyan kapisi anahtar on-kontrolunden ONCE calisir; bu test
+    # anahtar yolunu sinadigi icin beyan verilmis kabul edilir (.env'e
+    # DOKUNULMAZ, yalnizca monkeypatch).
+    monkeypatch.setenv("ATTEST_FREE_TIER", "gemini,groq")
     monkeypatch.setattr(main, "load_dotenv", lambda *a, **kw: False)
     monkeypatch.setattr(
         "sys.argv",

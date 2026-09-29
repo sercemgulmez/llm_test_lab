@@ -20,6 +20,7 @@ import sys
 import time
 
 # pricing ortam degiskenine bagli degil; load_dotenv oncesinde guvenle import edilir.
+import attestation
 import budget as budget_module
 import pricing
 
@@ -596,10 +597,44 @@ def _paid_retry_cost_note(call_ledger, paid_task_keys: list, extra_calls: int) -
 
 
 EXIT_FAIL_CLOSED = 3
+EXIT_FREE_TIER_UNATTESTED = 4
+EXIT_MISSING_RATE_LIMITS = 5
 
 
 class _FailClosed(RuntimeError):
     """Ucretli kosu on kosullari saglanmadi; kosu baslatilmaz."""
+
+
+class _FreeTierUnattested(RuntimeError):
+    """FREE_ONLY saglayici icin free-tier beyani yok; kosu baslatilmaz."""
+
+
+def _free_only_providers_in(llm_generators: list) -> set:
+    """Secili generator'lar arasindaki FREE_ONLY saglayicilar."""
+    return {
+        type(gen).__name__.removesuffix("Generator")
+        for gen, _v, _d in llm_generators
+        if type(gen).__name__.removesuffix("Generator") in config.FREE_ONLY_PROVIDERS
+    }
+
+
+def _free_tier_attestation_check(llm_generators: list) -> list:
+    """FREE_ONLY generator'lar icin beyan on kontrolu.
+
+    Kod, bir hesabin free tier'da olup olmadigini olcemez (bkz. attestation
+    modulu). Beyan yoksa bu generator'lar hic kosmaz — yanlislikla faturali
+    bir projeyle kosmak sessizce para harcatirdi.
+    """
+    selected = _free_only_providers_in(llm_generators)
+    if not selected:
+        return []
+    missing = attestation.missing_for(selected)
+    if not missing:
+        return []
+    return [
+        f"free-tier beyani eksik: {', '.join(missing)} "
+        f"({attestation.ENV_VAR} degiskeninde bildirilmeli). {attestation.GUIDANCE}"
+    ]
 
 
 def _fail_closed_check(llm_generators: list, budget_guard) -> list:
@@ -1026,6 +1061,16 @@ def main() -> None:
 
         # FAIL-CLOSED: olculemeyen harcama yapilmaz. Kontrol uretim baslamadan
         # once, yani tek kurus harcanmadan once yapilir.
+        unattested = _free_tier_attestation_check(llm_generators)
+        if unattested:
+            for reason in unattested:
+                _logger.error("  [FREE-TIER BEYAN] %s", reason)
+            _logger.error(
+                "  FREE_ONLY generator'lar KOSULMADI. Saglayici arayuzunden dogrulayip "
+                "%s degiskenini .env dosyaniza ekleyin.", attestation.ENV_VAR,
+            )
+            raise _FreeTierUnattested("; ".join(unattested))
+
         fail_closed = _fail_closed_check(llm_generators, budget_guard)
         if fail_closed:
             for reason in fail_closed:
@@ -1207,6 +1252,13 @@ def main() -> None:
             "yukaridaki BASARISIZ GENERATOR OZETI bolumune bakin.",
             len(failed_generations), total_lost,
         )
+
+    if isinstance(run_failure, _FreeTierUnattested):
+        _logger.error(
+            "\nKOSU DURDURULDU — free-tier beyani yok (%s). %d satir diske yazildi: %s/",
+            run_failure, len(executed_rows), args.output_dir,
+        )
+        sys.exit(EXIT_FREE_TIER_UNATTESTED)
 
     if isinstance(run_failure, _FailClosed):
         # Ucretli on kosullar saglanmadi: ucretsiz/sablon satirlar yazildi ama
