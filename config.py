@@ -126,6 +126,36 @@ RETRY_BACKOFF_SECONDS: float = 8.0
 MAX_PARALLEL_WORKERS: int = 9
 MAX_PARALLEL_GENERATORS: int = 3
 
+# ============= LLM ISTEMCI TIMEOUT'U =============
+# REQUEST_TIMEOUT (10 sn) runner.py'nin HTTPBIN test cagrilari icindir ve oyle
+# kalir. LLM uretim cagrilari bambaska bir is: 3000 token uretmek 10 saniyeye
+# sigmaz ve sigmadiginda TIMEOUT -> 'altyapi' hatasi uretir. Bu yuzden LLM
+# istemcileri AYRI bir timeout kullanir.
+#
+# Kurulu SDK'larin kendi varsayilanlari (kaynak koddan, 29.09.2026):
+#   openai 1.109.1      -> connect=5, read=600, write=600, pool=600
+#   anthropic 0.120.2   -> connect=5, read=600, write=600, pool=600
+#   google-genai 1.47.0 -> HttpOptions.timeout=None -> httpx'te SONSUZ
+#   groq                -> ayri paket yok; OpenAI SDK + base_url kullaniliyor
+# Asagidaki degerler bu varsayilanlarin en dusugunun altina inmez.
+LLM_REQUEST_TIMEOUT: dict[str, float] = {
+    "connect": 10.0,
+    "read": 600.0,
+    "write": 600.0,
+    "pool": 600.0,
+}
+
+# Saglayici bazinda override (bos = LLM_REQUEST_TIMEOUT gecerli).
+# Anahtar: generator'in _provider_label degeri kucuk harfle ("openai", "groq",
+# "gemini", "claude").
+LLM_REQUEST_TIMEOUT_BY_PROVIDER: dict[str, dict[str, float]] = {}
+
+
+def llm_timeout_for(provider: str) -> dict[str, float]:
+    """Bir saglayici icin efektif LLM timeout sozlugu."""
+    override = LLM_REQUEST_TIMEOUT_BY_PROVIDER.get((provider or "").lower())
+    return dict(override or LLM_REQUEST_TIMEOUT)
+
 MAX_TOKENS_BY_PROVIDER: dict[str, int] = {
     "openai": 16384,
     "gemini": 8192,

@@ -6,6 +6,7 @@ import logging
 from typing import Dict, List
 
 import config
+import llm_timeout
 from models import ApiOperation, TokenUsage
 from generators.base import BaseGenerator, ProviderResponseParseError
 from security.secret_loader import get_api_key_from_env
@@ -36,7 +37,9 @@ class OpenAIGenerator(BaseGenerator):
         if self._client is None:
             kwargs: dict = {
                 "api_key": api_key,
-                "timeout": config.REQUEST_TIMEOUT,
+                # config.REQUEST_TIMEOUT DEGIL: o httpbin testlerinin 10 sn'lik
+                # timeout'u ve bir LLM uretim cagrisi icin fazlasiyla kisa.
+                "timeout": llm_timeout.httpx_timeout_for(self._provider_label),
             }
             if self._base_url:
                 kwargs["base_url"] = self._base_url

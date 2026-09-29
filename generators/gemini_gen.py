@@ -3,6 +3,7 @@
 import logging
 from typing import Dict, List
 
+import llm_timeout
 from models import ApiOperation, TokenUsage
 from generators.base import BaseGenerator, ProviderResponseParseError
 from security.secret_loader import get_api_key
@@ -11,12 +12,16 @@ _logger = logging.getLogger(__name__)
 
 try:
     from google import genai  # type: ignore
+    from google.genai import types as genai_types  # type: ignore
 except ImportError:
     genai = None  # type: ignore
+    genai_types = None  # type: ignore
 
 
 class GeminiGenerator(BaseGenerator):
     """Google Gemini API'si ile test senaryosu üretir."""
+
+    _provider_label: str = "Gemini"
 
     def __init__(self, model: str) -> None:
         self.model = model
@@ -27,7 +32,15 @@ class GeminiGenerator(BaseGenerator):
             raise RuntimeError("'google-genai' paketi yüklü değil. pip install google-genai")
         api_key = get_api_key("gemini")
         if self._client is None:
-            self._client = genai.Client(api_key=api_key)
+            # Once hic timeout verilmiyordu: google-genai HttpOptions.timeout=None
+            # birakiyor ve httpx bunu SONSUZ olarak yorumluyor, yani asili kalan
+            # bir istek kosuyu sureklilesirebiliyordu.
+            self._client = genai.Client(
+                api_key=api_key,
+                http_options=genai_types.HttpOptions(
+                    timeout=llm_timeout.genai_timeout_ms_for(self._provider_label),
+                ),
+            )
         return self._client
 
     @staticmethod

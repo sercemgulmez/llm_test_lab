@@ -733,6 +733,7 @@ class BaseGenerator(ABC):
                         latency_ms=int((time.perf_counter() - started_at) * 1000),
                         call_meta=getattr(self, "_last_call_meta", None),
                         prompt_chars=len(prompt),
+                        provider_label=getattr(self, "_provider_label", ""),
                     )
                     if failure_origin(error_class) == "altyapi":
                         had_infrastructure_failure = True

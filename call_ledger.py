@@ -21,6 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import llm_timeout
 import pricing
 from checkpoint import _JsonlLog
 from error_taxonomy import classify_error, failure_origin
@@ -188,6 +189,7 @@ class CallLedger:
         latency_ms: int | None = None,
         call_meta: dict | None = None,
         prompt_chars: int = 0,
+        provider_label: str = "",
     ) -> str:
         """Yanit alinamayan cagriyi (429, kota, timeout, ag) deftere yazar.
 
@@ -237,6 +239,15 @@ class CallLedger:
             "raw_response_length": 0,
             "failed": True,
             "error_class": error_class,
+            # Zaman asiminda: hangi timeout gecerliydi ve hangi asamada koptu.
+            # Sadece TIMEOUT icin doldurulur; digerlerinde None kalir.
+            "timeout_seconds": (
+                llm_timeout.timeout_seconds_for(provider_label or "")
+                if error_class == "TIMEOUT" else None
+            ),
+            "timeout_phase": (
+                llm_timeout.timeout_phase(exc) if error_class == "TIMEOUT" else None
+            ),
             "failure_origin": failure_origin(error_class),
             "error": redact_secrets(str(exc)),
             "cases": [],
