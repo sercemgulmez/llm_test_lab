@@ -360,6 +360,20 @@ class CallLedger:
                 "pricing_available": pricing.price_table_ready(),
             }
 
+    def record_run_header(self, header: dict) -> None:
+        """Kosu basligini defterin ILK kaydi olarak yazar.
+
+        Hangi commit'in, hangi limitlerle ve hangi beyanla urettigi sonradan
+        geri getirilemez; o an yazilmazsa kaybolur.
+        """
+        if not self.enabled:
+            return
+        self._safe_append({
+            "ts": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "run_id": self.run_id,
+            **_clean(header),
+        })
+
     def flush(self) -> None:
         if self.enabled:
             self._log.flush()

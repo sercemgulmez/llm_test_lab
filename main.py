@@ -24,6 +24,7 @@ import attestation
 import budget as budget_module
 import pricing
 import rate_limiter
+import run_header
 
 from dotenv import load_dotenv
 
@@ -834,7 +835,8 @@ def _resolve_safe_output_dir(output_dir: str) -> str:
     return str(resolved)
 
 
-def _save_cli_run_info(args: argparse.Namespace, operations: list, output_dir: str, selected_keys: list | None) -> str:
+def _save_cli_run_info(args: argparse.Namespace, operations: list, output_dir: str,
+                       selected_keys: list | None, _run_header_snapshot: dict | None = None) -> str:
     metadata = {
         "job_id": "cli",
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -852,12 +854,14 @@ def _save_cli_run_info(args: argparse.Namespace, operations: list, output_dir: s
         "num_cases_per_operation": getattr(args, "num_cases", config.NUM_CASES_PER_OPERATION),
         "operation_count": len(operations),
         "operation_ids": [getattr(op, "op_id", "") for op in operations],
+        "run_header": _run_header_snapshot,
         "config_snapshot": {
             "openai_models": config.OPENAI_MODELS,
             "gemini_models": config.GEMINI_MODELS,
             "claude_models": config.CLAUDE_MODELS,
             "groq_models": config.GROQ_MODELS,
             "request_timeout": config.REQUEST_TIMEOUT,
+            "llm_request_timeout": dict(config.LLM_REQUEST_TIMEOUT),
             "retry_max_attempts": config.RETRY_MAX_ATTEMPTS,
             "retry_backoff_seconds": config.RETRY_BACKOFF_SECONDS,
             "max_parallel_workers": config.MAX_PARALLEL_WORKERS,
@@ -978,7 +982,6 @@ def main() -> None:
     all_rows: list = []
     selected_keys = getattr(args, "selected_generators", None)
     num_cases = getattr(args, "num_cases", config.NUM_CASES_PER_OPERATION)
-    _save_cli_run_info(args, operations, args.output_dir, selected_keys)
 
     # ── Checkpoint / resume ──────────────────────────────────────────────
     run_checkpoint = RunCheckpoint(
@@ -1032,6 +1035,15 @@ def main() -> None:
         "AKTIF" if budget_guard.armed else "ATIL",
         budget_thresholds["warn"], budget_thresholds["hard_warn"], budget_thresholds["stop"],
     )
+
+    # Kosu basligi: commit, dal, calisma agaci, efektif limitler, beyan.
+    header = run_header.build(
+        run_checkpoint.run_id, run_limiter, budget_thresholds, budget_guard.armed
+    )
+    run_header.log(header)
+    call_ledger.record_run_header(header)
+    # run_info basliktan SONRA yazilir ki ayni bilgiyi tasisin.
+    _save_cli_run_info(args, operations, args.output_dir, selected_keys, header)
 
     task_records = run_checkpoint.task_records()
     retry_counts: dict = {}
