@@ -54,12 +54,33 @@ def _registry(generator_class=_PassGenerator):
     return result
 
 
+def _free_tier_ready(monkeypatch):
+    """Sahte registry'deki FREE_ONLY modeller icin beyan + sentetik limit.
+
+    Gercek degerler free_tier_limits.json'a kullanicidan gelir ve repoda
+    bostur; testler kendi limitlerini uretir.
+    """
+    import rate_limiter
+
+    monkeypatch.setenv("ATTEST_FREE_TIER", "gemini,groq")
+    limits = {}
+    for provider, counts in (("Gemini", "input_only"), ("Groq", "total")):
+        for index in range(2):
+            key = (provider, f"model-{index}")
+            limits[key] = rate_limiter.ModelLimits(
+                provider, f"model-{index}", 30, 1000, 200_000, 1_000_000, 0.8, counts,
+            )
+    monkeypatch.setattr(rate_limiter, "load_limits", lambda *a, **k: dict(limits))
+    return limits
+
+
 def _set_dummy_credentials(monkeypatch):
     for env_var in smoke.ENV_BY_PROVIDER.values():
         monkeypatch.setenv(env_var, "dummy-value")
 
 
 def test_main_prints_observable_success_summary(monkeypatch, capsys):
+    _free_tier_ready(monkeypatch)
     _set_dummy_credentials(monkeypatch)
     monkeypatch.setattr(smoke, "load_dotenv", lambda *args, **kwargs: False)
     assert smoke.main(_registry()) == 0
@@ -130,6 +151,7 @@ def test_error_taxonomy():
 
 
 def test_targeted_selection_calls_only_requested_models(monkeypatch, capsys):
+    _free_tier_ready(monkeypatch)
     _set_dummy_credentials(monkeypatch)
     monkeypatch.setattr(smoke, "load_dotenv", lambda *args, **kwargs: False)
     selection = "gemini:model-0,groq:model-1"
@@ -185,6 +207,7 @@ def test_groq_120b_smoke_excludes_reasoning_without_exposing_it():
 
 def test_paid_providers_never_generate_by_default(monkeypatch, capsys):
     """Varsayilan modda UCRETLI saglayiciya URETIM cagrisi YAPILMAZ."""
+    _free_tier_ready(monkeypatch)
     generated: list = []
 
     class _Tracking(_PassGenerator):
@@ -204,6 +227,7 @@ def test_paid_providers_never_generate_by_default(monkeypatch, capsys):
 
 
 def test_paid_generation_requires_explicit_flag(monkeypatch, capsys):
+    _free_tier_ready(monkeypatch)
     generated: list = []
 
     class _Tracking(_PassGenerator):
@@ -228,3 +252,90 @@ def test_output_never_leaks_credentials(monkeypatch, capsys):
     assert "sk-proj-" + "A" * 48 not in output
     for word in ("balance", "credit", "quota remaining"):
         assert word not in output.lower()
+
+
+# ── Bolum 5: FREE_ONLY on kosullari ──────────────────────────────────────
+
+def test_free_only_models_are_deferred_without_attestation(monkeypatch, capsys):
+    """Beyan yoksa FREE_ONLY modellere URETIM cagrisi yapilmaz; ATLANIR."""
+    import rate_limiter
+
+    generated = []
+
+    class _Tracking(_PassGenerator):
+        def smoke_test(self):
+            generated.append(self.model)
+            return [{"generator": self.model}]
+
+    _set_dummy_credentials(monkeypatch)
+    monkeypatch.delenv("ATTEST_FREE_TIER", raising=False)
+    monkeypatch.setattr(rate_limiter, "load_limits", lambda *a, **k: {})
+    monkeypatch.setattr(smoke, "load_dotenv", lambda *a, **k: False)
+
+    smoke.main(_registry(_Tracking))
+    output = capsys.readouterr().out
+
+    assert generated == [], "beyan yokken hicbir FREE_ONLY uretim cagrisi olmamali"
+    assert output.count("[SKIP]") == 4, "Gemini x2 + Groq x2 ertelenmeli"
+    assert "beyan/limit yok" in output
+
+
+def test_free_only_models_are_deferred_without_published_limits(monkeypatch, capsys):
+    """Beyan var ama limitler girilmemisse yine ATLANIR (kota korlugu)."""
+    import rate_limiter
+
+    generated = []
+
+    class _Tracking(_PassGenerator):
+        def smoke_test(self):
+            generated.append(self.model)
+            return [{"generator": self.model}]
+
+    _set_dummy_credentials(monkeypatch)
+    monkeypatch.setenv("ATTEST_FREE_TIER", "gemini,groq")
+    monkeypatch.setattr(rate_limiter, "load_limits", lambda *a, **k: {})
+    monkeypatch.setattr(smoke, "load_dotenv", lambda *a, **k: False)
+
+    smoke.main(_registry(_Tracking))
+    output = capsys.readouterr().out
+
+    assert generated == []
+    assert "yayimlanan limit yok" in output
+
+
+def test_free_only_generation_goes_through_the_limiter(monkeypatch, capsys):
+    """On kosullar tamamsa uretim cagrisi yapilir ve limitor bagli olur."""
+    seen_limiters = []
+
+    class _Tracking(_PassGenerator):
+        def smoke_test(self):
+            seen_limiters.append(getattr(self, "_rate_limiter", None))
+            return [{"generator": self.model}]
+
+    _set_dummy_credentials(monkeypatch)
+    _free_tier_ready(monkeypatch)
+    monkeypatch.setattr(smoke, "load_dotenv", lambda *a, **k: False)
+
+    assert smoke.main(_registry(_Tracking)) == 0
+    capsys.readouterr()
+
+    assert len(seen_limiters) == 4, "4 FREE_ONLY model uretim cagrisi yapmali"
+    assert all(limiter is not None for limiter in seen_limiters), (
+        "erisim kontrolu de kotadan yer yer; limitorden gecmeli"
+    )
+
+
+def test_paid_models_never_need_attestation(monkeypatch, capsys):
+    """Beyan/limit yoksa bile ucretlilerin metadata kontrolu calisir."""
+    import rate_limiter
+
+    _set_dummy_credentials(monkeypatch)
+    monkeypatch.delenv("ATTEST_FREE_TIER", raising=False)
+    monkeypatch.setattr(rate_limiter, "load_limits", lambda *a, **k: {})
+    monkeypatch.setattr(smoke, "load_dotenv", lambda *a, **k: False)
+
+    smoke.main(_registry())
+    output = capsys.readouterr().out
+
+    assert output.count("[PASS]") == 4, "OpenAI x2 + Claude x2 metadata ile gecmeli"
+    assert output.count("metadata") >= 4
