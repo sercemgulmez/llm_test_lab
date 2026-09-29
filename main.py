@@ -422,6 +422,19 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--budget-warn", type=float, default=None,
+        help="Butce UYARI esigi (USD). Varsayilan config.BUDGET_THRESHOLDS; "
+             "ortam degiskeni BUDGET_WARN_USD.",
+    )
+    parser.add_argument(
+        "--budget-hard-warn", type=float, default=None,
+        help="Butce SERT UYARI esigi (USD); ortam degiskeni BUDGET_HARD_WARN_USD.",
+    )
+    parser.add_argument(
+        "--budget-stop", type=float, default=None,
+        help="Butce DURDURMA esigi (USD); ortam degiskeni BUDGET_STOP_USD.",
+    )
+    parser.add_argument(
         "--no-call-ledger",
         action="store_true",
         help="Cagri defterini kapatir (ham yanit/istek/token kaydi yazilmaz).",
@@ -714,7 +727,7 @@ def _fail_closed_check(llm_generators: list, budget_guard) -> list:
         blockers.append(
             "butce sigortasi ATIL (armed=False): $%.0f/$%.0f/$%.0f esikleri tetiklenmez"
             % (config.BUDGET_THRESHOLDS["warn"], config.BUDGET_THRESHOLDS["hard_warn"],
-               config.BUDGET_THRESHOLDS["stop"])
+               config.BUDGET_THRESHOLDS["stop"])  # on kontrol: varsayilanlar yeterli
         )
     return blockers
 
@@ -1005,13 +1018,20 @@ def main() -> None:
         )
 
     # K6 butce sigortasi — harcamayi DEFTERDEN okur (B4(a)).
-    budget_guard = budget_module.BudgetGuard(call_ledger, enabled=call_ledger.enabled)
-    if budget_guard.armed:
-        _logger.info(
-            "  [butce] sigorta aktif — uyari $%.0f / sert uyari $%.0f / DURDURMA $%.0f",
-            config.BUDGET_THRESHOLDS["warn"], config.BUDGET_THRESHOLDS["hard_warn"],
-            config.BUDGET_THRESHOLDS["stop"],
-        )
+    budget_thresholds = budget_module.resolve_thresholds({
+        "warn": getattr(args, "budget_warn", None),
+        "hard_warn": getattr(args, "budget_hard_warn", None),
+        "stop": getattr(args, "budget_stop", None),
+    })
+    budget_guard = budget_module.BudgetGuard(
+        call_ledger, thresholds=budget_thresholds, enabled=call_ledger.enabled
+    )
+    # armed durumu ve EFEKTIF esikler her kosuda yazdirilir (varsayilan olsa bile).
+    _logger.info(
+        "  [butce] sigorta %s — efektif esikler: uyari $%.2f / sert uyari $%.2f / DURDURMA $%.2f",
+        "AKTIF" if budget_guard.armed else "ATIL",
+        budget_thresholds["warn"], budget_thresholds["hard_warn"], budget_thresholds["stop"],
+    )
 
     task_records = run_checkpoint.task_records()
     retry_counts: dict = {}
@@ -1275,7 +1295,7 @@ def main() -> None:
             _logger.error(
                 "\n── BUTCE DURDURMASI ── Defter toplami $%.2f, sert esik $%.2f. "
                 "Uretim erken kesildi; o ana kadarki satirlar CSV'ye yaziliyor.",
-                budget_guard.spend(), config.BUDGET_THRESHOLDS["stop"],
+                budget_guard.spend(), budget_thresholds["stop"],
             )
 
         if failed_generations:

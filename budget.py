@@ -26,6 +26,44 @@ import pricing
 _logger = logging.getLogger(__name__)
 
 
+ENV_BY_LEVEL = {
+    "warn": "BUDGET_WARN_USD",
+    "hard_warn": "BUDGET_HARD_WARN_USD",
+    "stop": "BUDGET_STOP_USD",
+}
+
+
+def resolve_thresholds(overrides: dict | None = None) -> dict:
+    """Efektif butce esikleri: config varsayilani < env < komut satiri.
+
+    Esikler artan sirada olmali; degilse ValueError. Boylece "stop"u yanlislikla
+    "warn"in altina indirip kosuyu hemen durduran bir yazim hatasi sessizce
+    gecmez.
+    """
+    import os
+
+    effective = dict(config.BUDGET_THRESHOLDS)
+    for level, env_var in ENV_BY_LEVEL.items():
+        raw = os.getenv(env_var)
+        if raw is None or not str(raw).strip():
+            continue
+        try:
+            effective[level] = float(raw)
+        except ValueError as exc:
+            raise ValueError(f"{env_var} sayisal olmali, gelen: {raw!r}") from exc
+    for level, value in (overrides or {}).items():
+        if value is not None:
+            effective[level] = float(value)
+
+    ordered = (effective["warn"], effective["hard_warn"], effective["stop"])
+    if not (0 < ordered[0] <= ordered[1] <= ordered[2]):
+        raise ValueError(
+            f"Butce esikleri artan sirada ve pozitif olmali: warn={ordered[0]}, "
+            f"hard_warn={ordered[1]}, stop={ordered[2]}"
+        )
+    return effective
+
+
 class BudgetExceeded(RuntimeError):
     """Sert esik asildi: kosu durdurulmali."""
 
