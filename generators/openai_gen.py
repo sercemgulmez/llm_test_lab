@@ -41,6 +41,12 @@ class OpenAIGenerator(BaseGenerator):
                 # timeout'u ve bir LLM uretim cagrisi icin fazlasiyla kisa.
                 "timeout": llm_timeout.httpx_timeout_for(self._provider_label),
             }
+            if self._provider_label in config.FREE_ONLY_PROVIDERS:
+                # openai SDK varsayilani max_retries=2, yani tek bir mantiksal
+                # cagri sessizce 3 HTTP istegine cikabiliyor. Free tier'da bu,
+                # deftere yazilmayan ve RPM/RPD'yi tuketen gorunmez istekler
+                # demek. Yeniden deneme YALNIZCA bizim kodumuzda olmali.
+                kwargs["max_retries"] = 0
             if self._base_url:
                 kwargs["base_url"] = self._base_url
             self._client = OpenAI(**kwargs)
@@ -124,9 +130,7 @@ class OpenAIGenerator(BaseGenerator):
         _logger.info("[%s - %s - %s] %s (%s %s) üretiliyor...", self._provider_label, self.model, variant_name, op.op_id, op.method, op.path)
 
         def request_completion(prompt: str) -> tuple[str, int]:
-            token_ceiling = config.MAX_TOKENS_BY_PROVIDER.get(self._provider_label.lower(), 16384)
-            max_tokens = min(token_ceiling, max(2048, num_cases * 200))
-            return self._request_completion(prompt, max_tokens)
+            return self._request_completion(prompt, self._max_tokens_for(num_cases))
 
         return self._generate_cases_with_repair(
             op=op,

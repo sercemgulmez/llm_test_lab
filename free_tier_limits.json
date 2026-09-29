@@ -1,0 +1,65 @@
+{
+  "_comment": [
+    "FREE TIER hiz/kota limitleri. Degerler YALNIZCA saglayicinin kendi hesap",
+    "sayfasindan girilir (Groq: console.groq.com Limits; Gemini: AI Studio Rate",
+    "Limits). Ucuncu taraf sitelerden deger alinmaz.",
+    "",
+    "published_*: saglayicinin YAYIMLADIGI ham deger (guvenlik payi UYGULANMAMIS).",
+    "safety_factor: efektif limit = floor(published * safety_factor). Bos ise",
+    "  safety_factor_default gecerlidir.",
+    "tpm_counts: TPM'in neyi saydigi. Groq dokumani TPM'i toplam (girdi+cikti)",
+    "  olarak tanimlar; Gemini dokumani 'Tokens per minute (input)' der.",
+    "",
+    "Bir FREE_ONLY modelin published_* alanlarindan biri bile null ise o model",
+    "KOSMAZ (main.py EXIT_MISSING_RATE_LIMITS=5)."
+  ],
+  "safety_factor_default": 0.8,
+  "providers": {
+    "Groq": {
+      "tpm_counts": "total",
+      "source": "console.groq.com -> Settings -> Limits",
+      "source_url": "https://console.groq.com/settings/limits",
+      "fetched_date": null,
+      "rpd_reset_rule": "dokumante degil; x-ratelimit-reset-requests basligi sure verir",
+      "models": {
+        "openai/gpt-oss-120b": {
+          "published_rpm": null,
+          "published_rpd": null,
+          "published_tpm": null,
+          "published_tpd": null,
+          "safety_factor": null
+        },
+        "openai/gpt-oss-20b": {
+          "published_rpm": null,
+          "published_rpd": null,
+          "published_tpm": null,
+          "published_tpd": null,
+          "safety_factor": null
+        }
+      }
+    },
+    "Gemini": {
+      "tpm_counts": "input_only",
+      "source": "AI Studio -> Rate Limits",
+      "source_url": "https://ai.google.dev/gemini-api/docs/rate-limits",
+      "fetched_date": null,
+      "rpd_reset_rule": "dokumante: midnight Pacific time",
+      "models": {
+        "gemini-2.5-flash": {
+          "published_rpm": null,
+          "published_rpd": null,
+          "published_tpm": null,
+          "published_tpd": null,
+          "safety_factor": null
+        },
+        "gemini-3.5-flash-lite": {
+          "published_rpm": null,
+          "published_rpd": null,
+          "published_tpm": null,
+          "published_tpd": null,
+          "safety_factor": null
+        }
+      }
+    }
+  }
+}

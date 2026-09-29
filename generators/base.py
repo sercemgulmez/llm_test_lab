@@ -2,12 +2,15 @@
 
 import json
 import logging
+import random
 import re
 import time
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+import config
+import rate_limiter
 from config import MAX_PARALLEL_WORKERS, RETRY_BACKOFF_SECONDS, RETRY_MAX_ATTEMPTS
 from error_taxonomy import classify_error, failure_origin
 from budget import BudgetExceeded
@@ -501,6 +504,50 @@ def validate_generated_cases(op: ApiOperation, rows: List[dict], num_cases: int)
     return valid_rows[:num_cases], invalid_rows
 
 
+def rate_limiter_chars_per_token() -> float:
+    """Girdi tahmini icin karakter/token orani — pricing ile AYNI sabit."""
+    import pricing
+    return pricing.CHARS_PER_TOKEN
+
+
+def rate_limiter_input_factor() -> float:
+    """Girdi tahmini guvenlik katsayisi — pricing ile AYNI sabit."""
+    import pricing
+    return pricing.INPUT_SAFETY_FACTOR
+
+
+def _next_available_at(quota_kind: str) -> Optional[str]:
+    """Gunluk kota bittiginde modelin yeniden denenebilecegi EN ERKEN an.
+
+    Takvim sifirlanmasi VARSAYILMAZ: kayan 24 saatlik pencere kullanildigi icin
+    simdi + 24 saat yazilir. Bu muhafazakar taraftir; saglayici daha erken
+    sifirlarsa yalnizca gec baslamis oluruz, kota asilmaz.
+    """
+    if quota_kind != rate_limiter.QUOTA_DAY:
+        return None
+    from datetime import datetime, timedelta
+    return (datetime.now().astimezone() + timedelta(seconds=rate_limiter.DAY_S)).isoformat(
+        timespec="seconds"
+    )
+
+
+def rate_limiter_actual_tokens(usage, limits) -> Optional[int]:
+    """Limitorun sayacagi GERCEK token miktari.
+
+    Saglayicilar TPM'i farkli tanimliyor: Groq dokumani toplam (girdi+cikti),
+    Gemini dokumani "Tokens per minute (input)". Bu yuzden hangi olcutun
+    sayilacagi limit tanimindan gelir.
+    """
+    if usage is None or limits is None:
+        return None
+    coerced = TokenUsage.coerce(usage)
+    if not coerced.split_available:
+        return coerced.total_tokens or None
+    if limits.tpm_counts == "input_only":
+        return coerced.input_tokens
+    return coerced.input_tokens + coerced.billable_output_tokens
+
+
 def _apply_token_tracking(rows: List[Dict], total_tokens: int) -> None:
     """Operasyonun toplam token'ini satirlara PAYLASTIRIR (K4).
 
@@ -715,8 +762,11 @@ class BaseGenerator(ABC):
             # para harcamadan durur (kuyrukta bekleyen gorevler icin onemli).
             self._check_budget()
             started_at = time.perf_counter()
+            call_meta_extra: dict = {}
             try:
-                text, used_tokens = request_completion(prompt)
+                text, used_tokens, call_meta_extra = self._rate_limited_call(
+                    request_completion, prompt, num_cases
+                )
             except Exception as exc:
                 # Yanit alinamadi: defter bunu KAYBETMEMELI, sonra geri getirilemez.
                 if ledger is not None:
@@ -734,11 +784,18 @@ class BaseGenerator(ABC):
                         call_meta=getattr(self, "_last_call_meta", None),
                         prompt_chars=len(prompt),
                         provider_label=getattr(self, "_provider_label", ""),
+                        limiter_meta=call_meta_extra,
                     )
                     if failure_origin(error_class) == "altyapi":
                         had_infrastructure_failure = True
                 raise
-            latency_ms = int((time.perf_counter() - started_at) * 1000)
+            # latency_ms SAF saglayici suresidir: limitor beklemesi ayri alanda
+            # tutulur, aksi halde "model ne kadar yavas" sorusu cevaplanamaz.
+            latency_ms = max(
+                0,
+                int((time.perf_counter() - started_at) * 1000)
+                - int(call_meta_extra.get("limiter_wait_ms") or 0),
+            )
             usage = TokenUsage.coerce(used_tokens)
             call_usages.append(usage)
             parsed_rows = parse_llm_json_to_rows(text, op, generator_name)
@@ -781,6 +838,7 @@ class BaseGenerator(ABC):
                     cases=accepted_rows,
                     validation_errors=invalid_rows,
                     prompt_chars=len(prompt),
+                    limiter_meta=call_meta_extra,
                 )
 
             previously_accepted = llm_valid_count
@@ -871,6 +929,101 @@ class BaseGenerator(ABC):
             len(fallback_rows),
         )
         return final_rows
+
+    def _rate_limited_call(self, request_completion, prompt: str, num_cases: int):
+        """Limitorden gecerek cagri yapar; 429'da REAKTIF olarak yeniden dener.
+
+        Doner: (text, usage, meta) — meta limitor ve 429 bilgilerini tasir ve
+        oldugu gibi deftere yazilir.
+
+        Reaktif 429 denemeleri RETRY_MAX_ATTEMPTS'ten AYRI sayilir: bir hiz
+        limiti beklemesi modelin icerik uretme sansini tuketmemeli.
+        """
+        limiter = getattr(self, "_rate_limiter", None)
+        provider = getattr(self, "_provider_label", "")
+        model = getattr(self, "model", "")
+        meta = {
+            "limiter_wait_ms": 0,
+            "reserved_input_tokens": 0,
+            "reserved_output_tokens": 0,
+            "reactive_429_count": 0,
+            "retry_after_s": None,
+            "quota_kind": None,
+            "rate_limit_headers": {},
+        }
+        if limiter is None or not limiter.is_managed(provider, model):
+            text, usage = request_completion(prompt)
+            return text, usage, meta
+
+        output_ceiling = self._max_tokens_for(num_cases)
+        input_estimate = int(
+            (len(prompt) / rate_limiter_chars_per_token()) * rate_limiter_input_factor()
+        )
+        meta["reserved_input_tokens"] = input_estimate
+        meta["reserved_output_tokens"] = output_ceiling
+
+        # Hicbir zaman basarili olamayacak istek: beklemek cozmez.
+        limiter.preflight(provider, model, input_estimate + output_ceiling)
+
+        attempts = 0
+        while True:
+            reservation = limiter.reserve(provider, model, input_estimate, output_ceiling)
+            meta["limiter_wait_ms"] += reservation.wait_ms
+            try:
+                text, usage = request_completion(prompt)
+            except Exception as exc:
+                limiter.settle(reservation, actual_tokens=None)
+                if classify_error(exc) != "RATE_LIMIT":
+                    raise
+                headers = rate_limiter.response_headers(exc)
+                kind = rate_limiter.quota_kind(exc, provider)
+                meta["reactive_429_count"] += 1
+                meta["quota_kind"] = kind
+                meta["retry_after_s"] = rate_limiter.retry_after_seconds(exc)
+                meta["rate_limit_headers"] = rate_limiter.known_rate_limit_headers(provider, headers)
+                limiter.calibrate(provider, model, headers)
+                limiter.note_reactive_429(provider, model, kind, _next_available_at(kind))
+                attempts += 1
+                if kind == rate_limiter.QUOTA_DAY:
+                    # Gunluk kota bittiyse AYNI OTURUMDA tekrar denenmez;
+                    # gunlerce beklemek yerine durulur ve raporlanir.
+                    _logger.error(
+                        "  [limitor] %s/%s GUNLUK KOTA bitti — bu oturumda tekrar denenmeyecek.",
+                        provider, model,
+                    )
+                    raise
+                if attempts > config.REACTIVE_429_MAX_RETRIES:
+                    raise
+                wait = meta["retry_after_s"]
+                if wait is None:
+                    wait = rate_limiter.MINUTE_S
+                wait += random.uniform(0.0, config.REACTIVE_429_JITTER_SECONDS)
+                _logger.warning(
+                    "  [limitor] %s/%s 429 (dakika kotasi) — %.1f sn beklenip tekrar denenecek "
+                    "(reaktif %d/%d, icerik denemesi HARCANMADI).",
+                    provider, model, wait, attempts, config.REACTIVE_429_MAX_RETRIES,
+                )
+                meta["limiter_wait_ms"] += int(wait * 1000)
+                time.sleep(wait)
+                continue
+
+            actual = rate_limiter_actual_tokens(usage, limiter.limits_for(provider, model))
+            limiter.settle(reservation, actual_tokens=actual)
+            headers = rate_limiter.response_headers(usage)
+            if headers:
+                limiter.calibrate(provider, model, headers)
+                meta["rate_limit_headers"] = rate_limiter.known_rate_limit_headers(provider, headers)
+            return text, usage, meta
+
+    def _max_tokens_for(self, num_cases: int) -> int:
+        """Bu cagri icin cikti TAVANI.
+
+        Degerler degismedi; yalnizca tek kaynaga tasindi ki limitor de ayni
+        tavani rezerve edebilsin. Deney parametresi DEGISTIRILMEDI.
+        """
+        provider = getattr(self, "_provider_label", "").lower()
+        ceiling = config.MAX_TOKENS_BY_PROVIDER.get(provider, 8192)
+        return min(ceiling, max(2048, num_cases * 200))
 
     def _check_budget(self) -> None:
         """Butce sigortasi bagliysa esikleri kontrol eder (K6)."""

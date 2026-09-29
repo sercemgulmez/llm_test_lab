@@ -39,6 +39,11 @@ class GeminiGenerator(BaseGenerator):
                 api_key=api_key,
                 http_options=genai_types.HttpOptions(
                     timeout=llm_timeout.genai_timeout_ms_for(self._provider_label),
+                    # google-genai varsayilani zaten retry YAPMIYOR
+                    # (retry_options=None -> stop_after_attempt(1)); burada
+                    # ACIKCA sabitleniyor ki bir surum yukseltmesi sessizce
+                    # gizli yeniden deneme getirmesin.
+                    retry_options=genai_types.HttpRetryOptions(attempts=1),
                 ),
             )
         return self._client
@@ -111,6 +116,14 @@ class GeminiGenerator(BaseGenerator):
             reasoning_included_in_output=False,
         )
 
+    def _max_tokens_for(self, num_cases: int) -> int:
+        """Gemini'de cikti tavani SABIT 8192; case sayisiyla olceklenmez.
+
+        Deney parametresi DEGISTIRILMEDI; yalnizca limitorun ayni tavani
+        rezerve edebilmesi icin tek kaynaga tasindi.
+        """
+        return 8192
+
     def _generate_for_operation(
         self,
         op: ApiOperation,
@@ -123,7 +136,7 @@ class GeminiGenerator(BaseGenerator):
         _logger.info("[Gemini - %s - %s] %s (%s %s) üretiliyor...", self.model, variant_name, op.op_id, op.method, op.path)
 
         def request_completion(prompt: str) -> tuple[str, int]:
-            return self._request_completion(prompt, 8192)
+            return self._request_completion(prompt, self._max_tokens_for(num_cases))
 
         return self._generate_cases_with_repair(
             op=op,

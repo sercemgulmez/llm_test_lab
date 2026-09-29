@@ -23,6 +23,7 @@ import time
 import attestation
 import budget as budget_module
 import pricing
+import rate_limiter
 
 from dotenv import load_dotenv
 
@@ -618,6 +619,53 @@ def _free_only_providers_in(llm_generators: list) -> set:
     }
 
 
+def _quota_block_until(task_records: dict, task_key: str):
+    """Gorev gunluk kota yuzunden hala bekliyorsa bitis ani, degilse None.
+
+    Gunlerce beklenmez: kosu bu gorevleri ATLAR ve sonunda raporlar.
+    """
+    record = task_records.get(task_key) or {}
+    value = record.get("next_available_at")
+    if not value:
+        return None
+    try:
+        moment = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    now = datetime.now(moment.tzinfo) if moment.tzinfo else datetime.now()
+    return moment if moment > now else None
+
+
+class _MissingRateLimits(RuntimeError):
+    """FREE_ONLY model icin yayimlanan limit degerleri yok; kosu baslatilmaz."""
+
+
+def _rate_limit_check(llm_generators: list, limits: dict) -> list:
+    """FREE_ONLY her modelin limit girdisi olmali.
+
+    Limit bilinmeden free tier'da kosmak, kotanin ne zaman bitecegini bilmeden
+    kosmaktir: gunluk kota tukenirse o model o gun bir daha uretmez.
+    """
+    blockers: list[str] = []
+    for gen, _v, _d in llm_generators:
+        provider = type(gen).__name__.removesuffix("Generator")
+        if provider not in config.FREE_ONLY_PROVIDERS:
+            continue
+        model = getattr(gen, "model", "")
+        if (provider, model) not in limits:
+            blockers.append(f"{provider}/{model}")
+    if not blockers:
+        return []
+    gaps = rate_limiter.missing_fields()
+    detail = "; ".join(
+        f"{p}/{m}: {', '.join(fields)}" for (p, m), fields in sorted(gaps.items())
+    )
+    return [
+        f"free_tier_limits.json'da limit girdisi eksik olan FREE_ONLY model(ler): "
+        f"{', '.join(sorted(set(blockers)))}. Bos alanlar -> {detail or 'yok'}"
+    ]
+
+
 def _free_tier_attestation_check(llm_generators: list) -> list:
     """FREE_ONLY generator'lar icin beyan on kontrolu.
 
@@ -935,6 +983,27 @@ def main() -> None:
     if call_ledger.enabled:
         _logger.info("  [defter] cagri kaydi: %s", call_ledger.path)
 
+    # FREE_ONLY hiz/kota limitoru. Limit girdisi olmayan model KOSMAZ.
+    limiter_limits = rate_limiter.load_limits()
+    run_limiter = rate_limiter.RateLimiter(
+        limiter_limits,
+        usage_path=Path(args.output_dir) / rate_limiter.USAGE_DIR_NAME
+        / run_checkpoint.run_id / "usage.jsonl",
+    )
+    if limiter_limits:
+        _logger.info("  [limitor] %d FREE_ONLY model yonetiliyor:", len(limiter_limits))
+        for name, values in run_limiter.effective_limits().items():
+            _logger.info(
+                "      %s | efektif rpm=%s rpd=%s tpm=%s tpd=%s (guvenlik payi %s, tpm=%s)",
+                name, values["effective_rpm"], values["effective_rpd"],
+                values["effective_tpm"], values["effective_tpd"],
+                values["safety_factor"], values["tpm_counts"],
+            )
+    else:
+        _logger.warning(
+            "  [limitor] free_tier_limits.json BOS — FREE_ONLY generator secilirse kosu durur."
+        )
+
     # K6 butce sigortasi — harcamayi DEFTERDEN okur (B4(a)).
     budget_guard = budget_module.BudgetGuard(call_ledger, enabled=call_ledger.enabled)
     if budget_guard.armed:
@@ -1036,6 +1105,7 @@ def main() -> None:
 
     generation_started_at = time.perf_counter()
     budget_stopped = False
+    quota_blocked: list = []
     executed_rows: list = []
     run_failure: Exception | None = None
     failed_generations: list[dict] = []
@@ -1071,6 +1141,16 @@ def main() -> None:
             )
             raise _FreeTierUnattested("; ".join(unattested))
 
+        rate_limit_blockers = _rate_limit_check(llm_generators, limiter_limits)
+        if rate_limit_blockers:
+            for reason in rate_limit_blockers:
+                _logger.error("  [LIMIT EKSIK] %s", reason)
+            _logger.error(
+                "  FREE_ONLY generator'lar KOSULMADI. Degerleri saglayicinin kendi "
+                "limit sayfasindan alip %s dosyasina girin.", rate_limiter.LIMITS_FILE,
+            )
+            raise _MissingRateLimits("; ".join(rate_limit_blockers))
+
         fail_closed = _fail_closed_check(llm_generators, budget_guard)
         if fail_closed:
             for reason in fail_closed:
@@ -1088,6 +1168,14 @@ def main() -> None:
                 if task_key in completed_tasks:
                     _logger.info("  [%s] checkpoint'te tamamlanmis, atlandi.", gen_label)
                     continue
+                blocked_until = _quota_block_until(task_records, task_key)
+                if blocked_until is not None:
+                    _logger.error(
+                        "  [%s] ATLANDI — gunluk kota penceresi henuz acilmadi (%s).",
+                        gen_label, blocked_until.isoformat(timespec="seconds"),
+                    )
+                    quota_blocked.append((gen_label, blocked_until))
+                    continue
                 # Pre-flight: anahtar yoksa gorevi hic thread'e verme (app.py ile ayni desen).
                 # Aksi halde her operasyon ayri ayri _get_client()'ta patlar ve log dolar.
                 try:
@@ -1097,6 +1185,7 @@ def main() -> None:
                     continue
                 gen_instance._call_ledger = call_ledger
                 gen_instance._budget_guard = budget_guard
+                gen_instance._rate_limiter = run_limiter
                 if budget_stopped:
                     _logger.error("  [butce] %s ATLANDI — sert esik asildi.", gen_label)
                     continue
@@ -1127,11 +1216,26 @@ def main() -> None:
                         # yine de ALTYAPI kaynakli sayilir ve yeniden kosulabilir.
                         origins.add("altyapi")
                     origin = "karma" if len(origins) > 1 else next(iter(origins), None)
+                    # Gunluk kota bittiyse bu gorev 'altyapi' sayilir ve
+                    # yeniden denenebilecegi EN ERKEN an kaydedilir.
+                    provider = type(gen_instance).__name__.removesuffix("Generator")
+                    model = getattr(gen_instance, "model", "")
+                    next_available = None
+                    if run_limiter.daily_quota_exhausted(provider, model):
+                        origin = "altyapi"
+                        next_available = run_limiter.stats()["daily_quota_exhausted"].get(
+                            f"{provider}/{model}"
+                        )
+                        _logger.error(
+                            "  [%s] GUNLUK KOTA bitti — yeniden denenebilecegi an: %s",
+                            gen_label, next_available or "bilinmiyor",
+                        )
                     run_checkpoint.mark_task_done(
                         task_key, len(rows),
                         fallback_cases=fallback_total,
                         failure_origin=origin,
                         retry_count=retry_counts.get(task_key, 0),
+                        next_available_at=next_available,
                     )
                     if getattr(gen_instance, "_budget_stopped", False):
                         budget_stopped = True
@@ -1158,6 +1262,14 @@ def main() -> None:
                         "(diger generator'lar devam ediyor)",
                         gen_label, type(exc).__name__, redact_secrets(str(exc)), lost_rows,
                     )
+
+        if quota_blocked:
+            _logger.error(
+                "\n── GUNLUK KOTA BEKLEMESI ── %d gorev atlandi; gunlerce beklenmedi. "
+                "Pencere acildiktan sonra --resume ile devam edin:", len(quota_blocked),
+            )
+            for label, moment in quota_blocked:
+                _logger.error("  %s | en erken %s", label, moment.isoformat(timespec="seconds"))
 
         if budget_stopped:
             _logger.error(
@@ -1238,6 +1350,14 @@ def main() -> None:
         save_generator_metrics_csv(metrics, args.output_dir)
         print_summary_table(executed_rows)
 
+    limiter_stats = run_limiter.stats()
+    if limiter_stats["total_wait_ms"] or any(limiter_stats["reactive_429"].values()):
+        _logger.info(
+            "\n── LIMITOR ── toplam bekleme %.1f sn · reaktif 429: %s",
+            limiter_stats["total_wait_ms"] / 1000.0,
+            {k: v for k, v in limiter_stats["reactive_429"].items() if v} or "yok",
+        )
+
     if call_ledger.enabled and call_ledger.write_errors:
         _logger.error(
             "\nUYARI: cagri defterine %d kayit YAZILAMADI (kosu etkilenmedi, "
@@ -1252,6 +1372,13 @@ def main() -> None:
             "yukaridaki BASARISIZ GENERATOR OZETI bolumune bakin.",
             len(failed_generations), total_lost,
         )
+
+    if isinstance(run_failure, (_MissingRateLimits, rate_limiter.ImpossibleRequest)):
+        _logger.error(
+            "\nKOSU DURDURULDU — hiz/kota limiti sorunu (%s). %d satir diske yazildi: %s/",
+            run_failure, len(executed_rows), args.output_dir,
+        )
+        sys.exit(EXIT_MISSING_RATE_LIMITS)
 
     if isinstance(run_failure, _FreeTierUnattested):
         _logger.error(

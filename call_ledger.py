@@ -140,6 +140,7 @@ class CallLedger:
         latency_ms: int | None = None,
         call_meta: dict | None = None,
         prompt_chars: int = 0,
+        limiter_meta: dict | None = None,
     ) -> None:
         if not self.enabled:
             return
@@ -165,6 +166,16 @@ class CallLedger:
             **usage.to_dict(),
             **self._cost_fields(usage, (call_meta or {}).get("model_requested"),
                                 call_meta, prompt_chars),
+            # ── Limitor / kota alanlari (Bolum 3.6) ──────────────────────
+            # limiter_wait_ms latency_ms'ten AYRIDIR: biri bizim bekletmemiz,
+            # digeri saglayicinin yanit suresi.
+            "limiter_wait_ms": int((limiter_meta or {}).get("limiter_wait_ms") or 0),
+            "reserved_input_tokens": (limiter_meta or {}).get("reserved_input_tokens"),
+            "reserved_output_tokens": (limiter_meta or {}).get("reserved_output_tokens"),
+            "reactive_429_count": int((limiter_meta or {}).get("reactive_429_count") or 0),
+            "retry_after_s": (limiter_meta or {}).get("retry_after_s"),
+            "quota_kind": (limiter_meta or {}).get("quota_kind"),
+            "rate_limit_headers": _clean((limiter_meta or {}).get("rate_limit_headers") or {}),
             "accepted_cases": accepted_cases,
             "rejected_cases": rejected_cases,
             "raw_response": raw[:MAX_RAW_RESPONSE_CHARS],
@@ -190,6 +201,7 @@ class CallLedger:
         call_meta: dict | None = None,
         prompt_chars: int = 0,
         provider_label: str = "",
+        limiter_meta: dict | None = None,
     ) -> str:
         """Yanit alinamayan cagriyi (429, kota, timeout, ag) deftere yazar.
 
@@ -232,6 +244,16 @@ class CallLedger:
             "cost_basis": "cagri_basarisiz_token_bildirilmedi",
             "pricing_available": False,
             "cost_usd_guard_estimate": failed_guard,
+            # ── Limitor / kota alanlari (Bolum 3.6) ──────────────────────
+            # limiter_wait_ms latency_ms'ten AYRIDIR: biri bizim bekletmemiz,
+            # digeri saglayicinin yanit suresi.
+            "limiter_wait_ms": int((limiter_meta or {}).get("limiter_wait_ms") or 0),
+            "reserved_input_tokens": (limiter_meta or {}).get("reserved_input_tokens"),
+            "reserved_output_tokens": (limiter_meta or {}).get("reserved_output_tokens"),
+            "reactive_429_count": int((limiter_meta or {}).get("reactive_429_count") or 0),
+            "retry_after_s": (limiter_meta or {}).get("retry_after_s"),
+            "quota_kind": (limiter_meta or {}).get("quota_kind"),
+            "rate_limit_headers": _clean((limiter_meta or {}).get("rate_limit_headers") or {}),
             "accepted_cases": 0,
             "rejected_cases": 0,
             "raw_response": "",

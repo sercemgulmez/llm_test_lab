@@ -88,9 +88,7 @@ class ClaudeGenerator(BaseGenerator):
         _logger.info("[Claude - %s - %s] %s (%s %s) üretiliyor...", self.model, variant_name, op.op_id, op.method, op.path)
 
         def request_completion(prompt: str) -> tuple[str, int]:
-            token_ceiling = config.MAX_TOKENS_BY_PROVIDER.get("claude", 8192)
-            max_tokens = min(token_ceiling, max(2048, num_cases * 200))
-            return self._request_completion(prompt, max_tokens)
+            return self._request_completion(prompt, self._max_tokens_for(num_cases))
 
         return self._generate_cases_with_repair(
             op=op,

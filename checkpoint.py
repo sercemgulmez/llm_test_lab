@@ -213,6 +213,7 @@ class RunCheckpoint:
         fallback_cases: int = 0,
         failure_origin: Optional[str] = None,
         retry_count: int = 0,
+        next_available_at: Optional[str] = None,
     ) -> None:
         """Gorevi tamamlanmis olarak isaretler.
 
@@ -228,6 +229,9 @@ class RunCheckpoint:
                 "fallback_cases": fallback_cases,
                 "failure_origin": failure_origin,
                 "retry_count": retry_count,
+                # Gunluk kota bittiyse bu andan once yeniden denemek anlamsizdir;
+                # --resume o zamana kadar bu gorevi atlar.
+                "next_available_at": next_available_at,
             })
 
     # ── Yurutme fazi ─────────────────────────────────────────────────────

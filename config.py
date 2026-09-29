@@ -155,6 +155,12 @@ MAX_PARALLEL_JOBS: int = 1
 REQUEST_TIMEOUT: int = 10
 RETRY_MAX_ATTEMPTS: int = 3
 RETRY_BACKOFF_SECONDS: float = 8.0
+
+# Reaktif 429 yeniden denemeleri AYRI ve DUSUK bir ust sinirla sayilir:
+# bir hiz limiti beklemesi, modelin icerik uretme denemesini tuketmemeli
+# (K7/K9 sayaclariyla karismamali).
+REACTIVE_429_MAX_RETRIES: int = 2
+REACTIVE_429_JITTER_SECONDS: float = 0.5
 MAX_PARALLEL_WORKERS: int = 9
 MAX_PARALLEL_GENERATORS: int = 3
 
