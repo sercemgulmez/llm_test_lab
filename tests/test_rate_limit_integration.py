@@ -1,6 +1,5 @@
 """Bolum 3/7: limitorun uretim akisiyla birlikte davranisi ($0, ag yok)."""
 
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
