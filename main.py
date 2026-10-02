@@ -1182,8 +1182,18 @@ def main() -> None:
                     num_cases_by_op=(allocation["traditional"] if allocation else None),
                 )
                 all_rows.extend(trad_rows)
-                run_checkpoint.record_generated(trad_rows, "traditional")
-                run_checkpoint.mark_task_done("traditional", len(trad_rows), fallback_cases=0)
+                # NESIL DAMGASI: LLM dongusu gibi burada da epoch yazilmali.
+                # Eskiden varsayilan 0 kullaniliyordu; --discard-task ile
+                # traditional yeniden kosuldugunda yeni satirlar da epoch 0'a
+                # yaziliyor ve ESKI satirlarla birlikte yukleniyordu (olculdu:
+                # 150 yerine 300 satir). Yeniden kosu KISMI BIRLESTIRME degil
+                # TAM DEGISTIRME olmali.
+                trad_epoch = retry_counts.get("traditional", 0)
+                run_checkpoint.record_generated(trad_rows, "traditional", epoch=trad_epoch)
+                run_checkpoint.mark_task_done(
+                    "traditional", len(trad_rows), fallback_cases=0,
+                    retry_count=trad_epoch,
+                )
                 _logger.info("  [Geleneksel] %d senaryo üretildi.", len(trad_rows))
 
         # LLM tabanlı generator'lar — dış döngü paralelliği (generator başına bir thread)

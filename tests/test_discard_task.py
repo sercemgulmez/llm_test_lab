@@ -107,3 +107,44 @@ def test_discard_unknown_task_is_refused(monkeypatch, tmp_path, caplog):
         main.main()
     assert excinfo.value.code == 1
     assert "boyle tamamlanmis bir gorev yok" in caplog.text
+
+
+def test_traditional_also_honours_the_epoch(monkeypatch, tmp_path):
+    """Traditional dali da nesil damgasi yazmali.
+
+    Olculen hata: Traditional dali record_generated/mark_task_done'a epoch ve
+    retry_count GECIRMIYORDU. --discard-task traditional ile kullanildiginda yeni
+    satirlar da epoch 0'a yaziliyor ve eski 150 satirla birlikte yukleniyordu
+    (generation.jsonl append-only) -> 300 satir.
+    """
+    import main
+
+    monkeypatch.setattr(main, "load_dotenv", lambda *a, **k: False)
+    monkeypatch.setenv("ATTEST_FREE_TIER", "gemini,groq")
+    argv = [
+        "main.py", "--endpoints", "GET /get,POST /post",
+        "--base-url", "https://httpbin.org", "--generators", "traditional",
+        "--num-cases", "3", "--no-run", "--output-dir", str(tmp_path),
+    ]
+    monkeypatch.setattr("sys.argv", list(argv))
+    main.main()
+
+    ckpt = RunCheckpoint(str(tmp_path), enabled=True)
+    run_id = sorted(p.name for p in (tmp_path / ".checkpoints").iterdir())[-1]
+    first = RunCheckpoint(str(tmp_path), run_id=run_id, enabled=True)
+    before = len(first.load_generated_rows())
+    assert before > 0
+
+    # Ayni run_id'yi surdurerek traditional'i AT ve yeniden kos
+    monkeypatch.setattr("sys.argv", argv + ["--resume", run_id,
+                                            "--discard-task", "traditional"])
+    main.main()
+
+    after = RunCheckpoint(str(tmp_path), run_id=run_id, enabled=True)
+    rows = after.load_generated_rows()
+    assert len(rows) == before, (
+        f"yeniden kosu DEGISTIRMELI, eklemememeli: once {before}, sonra {len(rows)}"
+    )
+    identities = [(r["generator"], r["prompt_variant"], r["tc_id"]) for r in rows]
+    assert len(identities) == len(set(identities)), "mukerrer kimlik olmamali"
+    assert after.task_records()["traditional"]["retry_count"] == 1
