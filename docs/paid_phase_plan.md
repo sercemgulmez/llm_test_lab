@@ -125,6 +125,42 @@ tahminiyle yapılmıştı).
 - **Checkpoint**: her görev bitince diske yazılır; çökmede tek görev kaybedilir.
 - **Defter**: her çağrının ham yanıtı, tam isteği, token ayrımı, maliyeti.
 
+### ZORUNLU kontrol: defter-kabul ile CSV satırı karşılaştırması
+
+**Her ücretli generator bittiğinde**, bir sonraki modele geçmeden önce:
+
+```bash
+python - <<'PY'
+import csv, glob, json
+from collections import Counter
+csvp = sorted(glob.glob("outputs/free_phase/executed_testcases_*.csv"))[-1]
+rows = list(csv.DictReader(open(csvp)))
+csv_count = Counter(r["generator"] for r in rows)
+led = glob.glob("outputs/free_phase/.calls/*/calls.jsonl")[0]
+acc = Counter()
+for line in open(led):
+    r = json.loads(line)
+    if r.get("record_type") == "run_header" or r.get("failed"): continue
+    if r.get("call_type") == "fallback": continue
+    acc[r.get("generator", "?")] += int(r.get("accepted_cases") or 0)
+for g in sorted(acc):
+    print(g, "defter", acc[g], "-> CSV", csv_count.get(g, 0))
+PY
+```
+
+**Fark varsa KOŞU DURUR ve bildirilir.** Gerekçe: 2 Ekim'de ücretsiz fazda tam
+bu sessiz kayıp yaşandı — repair çağrısı patlayınca ana çağrının çıktısı
+atılıyordu ve defterde 206 kabul edilmiş case varken CSV'ye yalnızca 15 satır
+girmişti. Hata düzeltildi (`generators/base.py`, Bulgu 6) ama ücretli fazda
+**sessizce tekrar etmemesi** için bu karşılaştırma her modelden sonra zorunlu
+kontroldür: orada kayıp, parası ödenmiş çıktının atılması demektir.
+
+Beklenen fark kaynakları (kayıp sayılmaz, ama açıklanmalı):
+- `num_cases` üstü kırpma: defter kabul > CSV satırı olabilir (hedef 150'ye
+  kırpılır). Bu normaldir; **CSV < 150 ise** sorun vardır.
+- Fallback satırları defterde `accepted_cases` değil `fallback` kaydı olarak
+  görünür; `fallback_share` ile birlikte okunmalı.
+
 ### Durma koşulları
 
 | Koşul | Davranış |
@@ -132,6 +168,7 @@ tahminiyle yapılmıştı).
 |---|---|
 | Bütçe eşiği ($80) | `BudgetExceeded` → kalan görevler iptal, üretilen satırlar yazılır |
 | Bakiye/kota hatası | **Devre kesici** (ölçüldü): ilk kalıcı hatada `_aborted=True`, o modelin kalan operasyonları hiç denenmez, fallback üretilmez, görev boş döner ve 'altyapi' işaretlenir |
+| Defter-CSV farkı | **Manuel kontrol** (yukarıdaki blok). Kodda otomatik değil; her modelden sonra operatör çalıştırır ve fark varsa durur |
 | 3 ardışık hata | **Şu an kodda YOK.** `RETRY_MAX_ATTEMPTS=3` operasyon başına çalışır, ama "3 ardışık başarısız operasyon → generator'ı durdur" kuralı yok. Gerekirse eklenir — ayrı onay |
 | Kullanıcı iptali | `Ctrl-C` → `finally` bloğu checkpoint ve defteri flush eder, CSV yazılır |
 
