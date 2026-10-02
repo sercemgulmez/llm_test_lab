@@ -967,10 +967,19 @@ class BaseGenerator(ABC):
 
         attempts = 0
         while True:
-            reservation = limiter.reserve(provider, model, input_estimate, output_ceiling)
+            try:
+                reservation = limiter.reserve(provider, model, input_estimate, output_ceiling)
+            except rate_limiter.QuotaExhausted as exc:
+                # Gunluk kota bitti: BEKLEMEYIZ. Gorev birakilir, kosu kisa kalir.
+                meta["quota_kind"] = rate_limiter.QUOTA_DAY
+                _logger.error("  [limitor] %s", exc)
+                raise
             meta["limiter_wait_ms"] += reservation.wait_ms
             try:
                 text, usage = request_completion(prompt)
+            except rate_limiter.QuotaExhausted:
+                # Rezervasyon alinamadi (semafor zaten birakildi); kota bugun bitti.
+                raise
             except Exception as exc:
                 limiter.settle(reservation, actual_tokens=None)
                 if classify_error(exc) != "RATE_LIMIT":
@@ -1045,6 +1054,14 @@ class BaseGenerator(ABC):
             self._retry_index = attempt
             try:
                 return self._generate_for_operation(op, variant_name, variant_desc, num_cases)
+            except rate_limiter.QuotaExhausted as exc:
+                # Kota bitisi yeniden denenmez: ayni gun icinde cozulmez.
+                # ALTYAPI kaynakli sayilir ki resume onu aday olarak gorsun.
+                self._infra_failures = getattr(self, "_infra_failures", 0) + 1
+                self._aborted = True
+                _logger.error("  [ATLANDI] %s — gunluk kota: %s", op.op_id, exc)
+                return []
+
             except BudgetExceeded:
                 # Butce asimi bir altyapi hatasi DEGILDIR: yeniden denemek para
                 # harcamaya devam etmek olurdu. Generator'i iptal et ve yukari tasi.

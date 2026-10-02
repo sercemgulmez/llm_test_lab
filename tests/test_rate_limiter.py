@@ -322,3 +322,67 @@ def test_gemini_headers_are_not_interpreted():
     # Kalibrasyon yine de calisir ama yalnizca bizim bildigimiz alanlarla;
     # onemli olan basliklarin DEFTERE yorumlanmis gibi yazilmamasi.
     assert limiter._states[key] is not None
+
+
+# ── Bekleme ÜST SINIRI: hiçbir çalıştırma saatlerce asılı kalmaz ─────────
+
+def test_long_wait_raises_instead_of_sleeping_for_hours():
+    """RPD tukenince limitor BEKLEMEZ: QuotaExhausted firlatir.
+
+    Aksi halde gunluk kotasi dolan bir model icin ~24 saat sleep edilir ve
+    calistirma asili kalir.
+    """
+    slept = []
+    limiter = RateLimiter(_limits(rpd=1), sleep=slept.append, max_wait_s=300.0)
+    first = limiter.reserve(*KEY, 10, 10)
+    limiter.settle(first, actual_tokens=20)
+
+    with pytest.raises(rate_limiter.QuotaExhausted) as excinfo:
+        limiter.reserve(*KEY, 10, 10)
+
+    assert slept == [], "uzun bekleme icin sleep CAGRILMAMALI"
+    assert excinfo.value.wait_s > 300.0
+    assert excinfo.value.next_available_at
+    assert "Gorev birakildi" in str(excinfo.value)
+
+
+def test_short_wait_still_sleeps():
+    """Ust sinirin ALTINDAKI bekleme normal sekilde bloklar (davranis degismedi)."""
+    slept = []
+    now = {"t": 0.0}
+    limiter = RateLimiter(
+        _limits(rpm=1), sleep=lambda s: (slept.append(s), now.__setitem__("t", now["t"] + s)),
+        clock=lambda: now["t"], max_wait_s=300.0,
+    )
+    limiter.settle(limiter.reserve(*KEY, 10, 10), actual_tokens=20)
+    reservation = limiter.reserve(*KEY, 10, 10)   # RPM=1 -> ~60 sn bekler
+    assert slept and 0 < slept[0] <= 60.0
+    assert reservation.wait_ms > 0
+
+
+def test_quota_exhaustion_marks_the_model_and_records_next_available_at():
+    limiter = RateLimiter(_limits(rpd=1), sleep=lambda s: None, max_wait_s=1.0)
+    limiter.settle(limiter.reserve(*KEY, 10, 10), actual_tokens=20)
+    with pytest.raises(rate_limiter.QuotaExhausted):
+        limiter.reserve(*KEY, 10, 10)
+
+    assert limiter.daily_quota_exhausted(*KEY) is True
+    moment = limiter.stats()["daily_quota_exhausted"][f"{KEY[0]}/{KEY[1]}"]
+    assert moment, "next_available_at yazilmali"
+    from datetime import datetime
+    assert datetime.fromisoformat(moment) > datetime.now().astimezone()
+
+
+def test_semaphore_is_released_on_quota_exhaustion():
+    """Kota bitiminde semafor birakilmali, yoksa model kalici kilitlenir."""
+    limiter = RateLimiter(_limits(rpd=1), sleep=lambda s: None, max_wait_s=1.0)
+    limiter.settle(limiter.reserve(*KEY, 10, 10), actual_tokens=20)
+    for _ in range(3):
+        with pytest.raises(rate_limiter.QuotaExhausted):
+            limiter.reserve(*KEY, 10, 10)   # kilitlenmeden tekrar tekrar firlatmali
+
+
+def test_default_max_wait_comes_from_config():
+    import config
+    assert RateLimiter({})._max_wait_s == config.LIMITER_MAX_WAIT_SECONDS
+    assert config.LIMITER_MAX_WAIT_SECONDS < 24 * 3600, "24 saatlik bekleme asla"

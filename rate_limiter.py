@@ -32,6 +32,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Deque, Dict, Optional, Tuple
 
+import config
+
 _logger = logging.getLogger(__name__)
 
 LIMITS_FILE = "free_tier_limits.json"
@@ -51,6 +53,21 @@ class MissingRateLimits(RuntimeError):
 
 class ImpossibleRequest(RuntimeError):
     """Tek bir istek bile TPM limitine sigmiyor; hicbir zaman basarili olamaz."""
+
+
+class QuotaExhausted(RuntimeError):
+    """Bugun bu modelde kota kalmadi; beklemek yerine gorev birakilir.
+
+    Limitor saatlerce ya da gunlerce bloklamaz: bekleme suresi
+    config.LIMITER_MAX_WAIT_SECONDS'i asarsa bu firlatilir. Cagiran taraf gorevi
+    'altyapi' isaretler, `next_available_at` yazar ve kosu biter; zamanlayici
+    sonraki firsatta devam eder.
+    """
+
+    def __init__(self, message: str, next_available_at: str, wait_s: float) -> None:
+        super().__init__(message)
+        self.next_available_at = next_available_at
+        self.wait_s = wait_s
 
 
 @dataclass(frozen=True)
@@ -249,6 +266,7 @@ class RateLimiter:
         usage_path: Optional[Path] = None,
         sleep=time.sleep,
         clock=time.monotonic,
+        max_wait_s: Optional[float] = None,
     ) -> None:
         self._limits = dict(limits)
         self._states: Dict[Tuple[str, str], _ModelState] = {
@@ -258,6 +276,9 @@ class RateLimiter:
         self._sleep = sleep
         self._clock = clock
         self._usage_path = Path(usage_path) if usage_path else None
+        self._max_wait_s = (
+            config.LIMITER_MAX_WAIT_SECONDS if max_wait_s is None else float(max_wait_s)
+        )
         self.total_wait_ms = 0
         if self._usage_path is not None:
             self._load_usage()
@@ -413,6 +434,19 @@ class RateLimiter:
                     raise ImpossibleRequest(
                         f"{provider}/{model}: {tokens} token gunluk limite sigmiyor "
                         f"(efektif TPD {limits.effective_tpd})."
+                    )
+                if wait > self._max_wait_s:
+                    # Saatlerce/gunlerce BEKLEMEYIZ. Bu, "bugun bu modelde kota
+                    # kalmadi" demektir; gorev birakilir ve zamanlayici devam eder.
+                    state.semaphore.release()
+                    moment = _wall_clock_after(wait)
+                    self.note_reactive_429(provider, model, QUOTA_DAY, moment)
+                    raise QuotaExhausted(
+                        f"{provider}/{model}: kota icin {wait / 3600:.1f} saat beklemek "
+                        f"gerekiyor (ust sinir {self._max_wait_s / 60:.0f} dakika). "
+                        f"Gorev birakildi; en erken {moment}.",
+                        next_available_at=moment,
+                        wait_s=wait,
                     )
                 self._sleep(wait)
                 waited_s += wait
@@ -599,3 +633,12 @@ def quota_kind(exc, provider: str) -> str:
         # Saglayici bekleyecegimiz sureyi soyluyorsa bu dakika kotasidir.
         return QUOTA_MINUTE
     return QUOTA_DAY  # muhafazakar
+
+
+def _wall_clock_after(seconds: float) -> str:
+    """Duvar saatine gore `seconds` sonrasi (ISO). next_available_at icin."""
+    from datetime import datetime, timedelta
+
+    return (datetime.now().astimezone() + timedelta(seconds=seconds)).isoformat(
+        timespec="seconds"
+    )
