@@ -28,9 +28,9 @@ kadar küçük**:
 Sağlayıcı panelleri maliyeti sente yuvarlar. $0.000139'luk bir çağrıyı panelde
 **$0.00** olarak görürüz; "sapma ≤%10" ölçütü uygulanamaz — %10'u $0.0000139'dur.
 
-### Çözüm: iki ölçütü ayır
+### Çözüm: iki ölçütü ayır (kullanıcı kararı, 2 Ekim 2026)
 
-**Ölçüt A — token mutabakatı (birincil, her zaman uygulanabilir).**
+**Ölçüt A — token mutabakatı: BİRİNCİL ölçüt.**
 Sağlayıcı panelleri **token sayısını** model bazında raporlar. Defterdeki
 `input_tokens` / `output_tokens` toplamı ile panelin token sayısı karşılaştırılır.
 Sapma ≤%10 → PASS. Bu, fiyat tablosundan bağımsız olarak *ölçümün* doğruluğunu
@@ -47,14 +47,18 @@ Panelin sente yuvarlamasını aşmak için canary, tutarı ≥$0.01 yapacak kada
 | claude-haiku-4-5 | $0.008252 | 2 |
 | claude-sonnet-4-5 | $0.024756 | 1 |
 
-**Önerilen canary:** `gpt-4o-mini` × 1 operasyon × 15 case × **10 çağrı**
-(= 2 variant × 5 operasyon, yani modelin normal bir tam turu). Maliyet **~$0.010**,
-panelde görünür, ve aynı zamanda gerçek koşu yolunu (repair, limitör, defter,
-bütçe sigortası) birebir çalıştırır. 150 satır üretir ve bu satırlar **ücretli
-fazın bir parçası olarak saklanır** — atılmaz, yani para iki kez harcanmaz.
+**Canary (ONAYLANDI):** `gpt-4o-mini` × 2 variant × 5 operasyon × 15 case =
+**10 çağrı**, yani modelin normal bir tam turu. Maliyet **~$0.010**, panelde
+görünür, ve gerçek koşu yolunu (repair, limitör, defter, bütçe sigortası) birebir
+çalıştırır.
 
-Bu, plandaki "1 case" tanımından sapar. Sapmanın gerekçesi yukarıdaki tablodur;
-onayınıza sunulur.
+**Ürettiği 150 satır GERÇEK VERİ olarak saklanır, atılmaz.** Yani bu koşu hem
+ölçüm hem de `gpt-4o-mini`'nin ücretli fazdaki ilk üretim turudur; para iki kez
+harcanmaz ve ücretli fazın kalan işi 3 modele (gpt-4.1, claude-haiku-4-5,
+claude-sonnet-4-5) iner.
+
+Bu, ilk plandaki "1 case" tanımından sapar; gerekçe yukarıdaki görünürlük
+tablosudur ve sapma onaylandı.
 
 ## Canary adımları
 
@@ -78,17 +82,22 @@ onayınıza sunulur.
 4. **24 saat beklenir** (panel gecikmeli).
 5. OpenAI panelinde (platform.openai.com → Usage) `gpt-4o-mini` satırının token
    ve maliyet değerleri okunur.
-6. Karar:
-   - Token sapması ≤%10 **ve** dolar sapması ≤%10 → **canary PASS**
-   - Token sapması >%10 → **DUR.** Defterin token kaydı yanlış; ücretli faza
-     girilmez, sebep bulunur.
-   - Token tutuyor ama dolar >%10 sapıyor → fiyat tablosu güncellenmiş olabilir;
-     fiyatlar yeniden çekilir, tablo onaya sunulur.
+6. Karar (**token mutabakatı birincil**):
+   - **Token sapması ≤%10 → canary PASS.** Ücretli faza devam edilir.
+   - Token sapması >%10 → **DUR.** Defterin token kaydı yanlıştır; bütçe
+     sigortası da bu kayda dayandığı için ücretli faza girilmez, sebep bulunur.
+   - Token tutuyor ama dolar >%10 sapıyor → PASS engellenmez, ama fiyat tablosu
+     güncellenmiş olabilir; fiyatlar yeniden çekilir ve tablo onaya sunulur.
+     (Dolar ölçütü ikincildir çünkü panel yuvarlaması ve faturalama gecikmesi
+     bizim hesabımızdan bağımsız hata kaynaklarıdır.)
 
 ## Tam ücretli faz
 
-4 model × 150 test = **600 satır**. Sağlayıcı sırayla: önce OpenAI (gpt-4o-mini
-canary'den gelir, sonra gpt-4.1), sonra Claude (haiku, sonnet).
+4 model × 150 test = **600 satır**. Sağlayıcı sırayla: önce OpenAI, sonra Claude.
+
+`gpt-4o-mini`'nin 150 satırı **canary'den gelir ve saklanır**, yani canary PASS
+olduktan sonra geriye **3 model × 150 = 450 satır** kalır (~$0.46, repair dahil
+~$0.93).
 
 ### Tahmini maliyet
 
@@ -119,6 +128,7 @@ tahminiyle yapılmıştı).
 ### Durma koşulları
 
 | Koşul | Davranış |
+
 |---|---|
 | Bütçe eşiği ($80) | `BudgetExceeded` → kalan görevler iptal, üretilen satırlar yazılır |
 | Bakiye/kota hatası | **Devre kesici** (ölçüldü): ilk kalıcı hatada `_aborted=True`, o modelin kalan operasyonları hiç denenmez, fallback üretilmez, görev boş döner ve 'altyapi' işaretlenir |
@@ -141,3 +151,26 @@ sessizce kabul edilmez.
   üretim ölçülür.
 - `tokens_used` satır başına **tahsistir, ölçüm değildir** — raporlarda bu not
   otomatik basılır.
+
+---
+
+## Kabul edilen riskler (final rapora girecek)
+
+**Karanlık uyanma belirsizliği (kullanıcı kararı: kabul edilebilir risk).**
+`man launchd.plist`: launchd uyuyan makineyi uyandırmaz; `StartCalendarInterval`
+işi **bir sonraki uyanışta** koşar ve kaçırılan tetikleyiciler **tek olaya
+indirgenir**. Power Nap bu makinede etkin (`powernap 1`) ama Power Nap'in
+karanlık uyanmasında `StartCalendarInterval` ajanlarının koştuğuna dair resmî bir
+kaynak **bulunamadı** — doğrulanmadı, varsayılmadı.
+
+Azaltma: kullanıcı `sudo pmset repeat wake MTWRFSU 11:05:00` komutunu kendisi
+çalıştırır (tek tekrarlayan olay; `man pmset`: "you may only have one pair of
+repeating events scheduled"). Bu komut çalıştırılmazsa ücretsiz faz durmaz,
+yalnızca günlük turun zamanı kapak açılışına bağlı hale gelir. Gemini'nin RPD'si
+gece yarısı Pasifik'te sıfırlandığı için gün içinde bir kez açılması yeterlidir.
+
+**16:10 güvenlik kontrolü kaldırıldı (kullanıcı kararı).** RPM/TPM zaten
+limitörün reaktif mekanizmasıyla korunuyor: `Retry-After` + jitter ve
+`RETRY_MAX_ATTEMPTS`'ten ayrı, düşük bir reaktif deneme sınırı
+(`REACTIVE_429_MAX_RETRIES=2`). İkinci bir uyanma olayı hem gereksiz hem de
+`pmset` tek tekrarlayan çift desteklediği için mümkün değildi.

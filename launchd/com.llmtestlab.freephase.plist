@@ -11,24 +11,23 @@
     <string>/Users/suleymansercemgulmez/Projeler/llm_test_lab/scripts/free_phase_tick.sh</string>
   </array>
 
-  <!-- Gunluk tetikleyici 11:10 ve guvenlik kontrolu 16:10 (YEREL saat).
-       11:10 secimi: Gemini'nin RPD'si gece yarisi Pasifik'te sifirlanir; bu an
-       yerel saatte PDT'de 10:00, PST'de 11:00'dir. Sabit 11:10 her iki rejimde
-       de sifirlamadan SONRA kalir (PDT'de 01:10, PST'de 00:10 Pasifik).
-       10:05 gibi daha erken bir saat PST'ye gecildiginde 23:05 Pasifik'e, yani
-       sifirlamadan ONCEYE duserdi.
-       16:10 yalnizca RPM/TPM icindir; RPD beklemez. -->
+  <!-- TEK gunluk tetikleyici: 11:10 YEREL saat.
+       11:10 secimi hesaplandi: Gemini'nin RPD'si gece yarisi Pasifik'te
+       sifirlanir; bu an yerel saatte PDT'de 10:00, PST'de 11:00'dir. Sabit 11:10
+       her iki rejimde de sifirlamadan SONRA kalir (PDT'de 01:10, PST'de 00:10
+       Pasifik). 10:05 gibi daha erken bir saat PST'ye gecildiginde 23:05
+       Pasifik'e, yani sifirlamadan ONCEYE duserdi.
+
+       16:10 guvenlik kontrolu KALDIRILDI (kullanici karari): RPM/TPM zaten
+       limitorun reaktif mekanizmasiyla korunuyor (Retry-After + jitter, ayri ve
+       dusuk reaktif deneme siniri), ikinci bir uyanma olayina gerek yok. Ayrica
+       `man pmset`: yalnizca TEK bir tekrarlayan olay cifti kurulabilir, yani
+       ikinci bir pmset wake zaten mumkun degildi. -->
   <key>StartCalendarInterval</key>
-  <array>
-    <dict>
-      <key>Hour</key><integer>11</integer>
-      <key>Minute</key><integer>10</integer>
-    </dict>
-    <dict>
-      <key>Hour</key><integer>16</integer>
-      <key>Minute</key><integer>10</integer>
-    </dict>
-  </array>
+  <dict>
+    <key>Hour</key><integer>11</integer>
+    <key>Minute</key><integer>10</integer>
+  </dict>
 
   <!-- Yalnizca SIFIR-DISI cikista yeniden dener (man launchd.plist: SuccessfulExit
        false => ters kosulda yeniden baslat). Sarmalayici normalde her zaman 0 ile
