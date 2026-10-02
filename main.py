@@ -423,6 +423,12 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--discard-task", action="append", default=None, metavar="GOREV",
+        help="Bu gorevin ONCEKI satirlarini atip yeniden kosar (yalnizca --resume ile). "
+             "Operatorun 'bu veri kullanilamaz' karari icindir; hata kokeninden "
+             "BAGIMSIZDIR ve kokeni DEGISTIRMEZ. Birden fazla kez verilebilir.",
+    )
+    parser.add_argument(
         "--budget-warn", type=float, default=None,
         help="Butce UYARI esigi (USD). Varsayilan config.BUDGET_THRESHOLDS; "
              "ortam degiskeni BUDGET_WARN_USD.",
@@ -1047,6 +1053,28 @@ def main() -> None:
 
     task_records = run_checkpoint.task_records()
     retry_counts: dict = {}
+
+    # Operator karariyla veri atma: hata kokenine bakmaz, kokeni degistirmez.
+    # revoke + EPOCH ARTIMI birlikte yapilir; yalnizca revoke etmek sonraki
+    # --resume'da ayni satirlari ikinci kez yuklerdi (generation.jsonl append-only).
+    for task_key in (getattr(args, "discard_task", None) or []):
+        if not run_checkpoint.resumed:
+            _logger.error("HATA: --discard-task yalnizca --resume ile kullanilir.")
+            sys.exit(1)
+        record = task_records.get(task_key)
+        if record is None:
+            _logger.error(
+                "HATA: --discard-task %s — checkpoint'te boyle tamamlanmis bir gorev yok. "
+                "Mevcut gorevler: %s", task_key, ", ".join(sorted(task_records)) or "(yok)",
+            )
+            sys.exit(1)
+        retry_counts[task_key] = int(record.get("retry_count") or 0) + 1
+        run_checkpoint.revoke_task(task_key, reason="operator karariyla atildi (--discard-task)")
+        task_records.pop(task_key, None)
+        _logger.warning(
+            "  [atildi] %s — %s satir atildi, gorev yeniden kosulacak (nesil %d).",
+            task_key, record.get("rows"), retry_counts[task_key],
+        )
 
     if getattr(args, "retry_infra_fallback", False):
         if not run_checkpoint.resumed:
