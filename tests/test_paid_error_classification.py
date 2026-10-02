@@ -211,3 +211,42 @@ def test_guard_uses_the_resolved_thresholds(monkeypatch):
     guard = BudgetGuard(_L(), thresholds=resolve_thresholds({"warn": 5.0, "hard_warn": 8.0, "stop": 10.0}))
     with pytest.raises(budget.BudgetExceeded):
         guard.check()
+
+
+# ── Kendi istisnalarimiz sinifini ACIKCA bildirmeli ──────────────────────
+
+def test_our_own_exceptions_declare_their_class():
+    """Sinif ADINA bakan sezgisel eslesme bizim istisnalarimizda yanlis sonuc verdi.
+
+    QuotaExhausted'in adinda "quota" gectigi icin BILLING_QUOTA_ERROR (fatura
+    sorunu) sayiliyordu; ImpossibleRequest ise hicbir sezgiye uymadigi icin
+    UNKNOWN_ERROR / 'bilinmiyor' olarak kaydediliyordu. Ikisi de error_class
+    bildirir ve 'altyapi' kokenine duser.
+    """
+    import rate_limiter
+
+    cases = [
+        (rate_limiter.QuotaExhausted("kota", "2026-10-03T17:00:00+03:00", 86400.0),
+         "QUOTA_EXHAUSTED"),
+        (rate_limiter.ImpossibleRequest("tek istek 6655 token rezerve ediyor"),
+         "REQUEST_EXCEEDS_LIMIT"),
+    ]
+    for exc, expected in cases:
+        assert classify_error(exc) == expected, type(exc).__name__
+        assert failure_origin(classify_error(exc)) == "altyapi", type(exc).__name__
+
+
+def test_declared_class_must_be_a_known_infrastructure_class():
+    """Bildirilen sinif taksonomide tanimli olmali; yoksa koken 'bilinmiyor' kalir."""
+    from error_taxonomy import INFRASTRUCTURE_ERRORS
+
+    for name in ("QUOTA_EXHAUSTED", "REQUEST_EXCEEDS_LIMIT"):
+        assert name in INFRASTRUCTURE_ERRORS, name
+
+
+def test_declared_class_wins_over_name_heuristic():
+    class _Weird(Exception):
+        error_class = "QUOTA_EXHAUSTED"
+
+    exc = _Weird("timeout rate limit quota 429")   # her sezgiyi tetikleyecek metin
+    assert classify_error(exc) == "QUOTA_EXHAUSTED"

@@ -11,6 +11,7 @@ from __future__ import annotations
 INFRASTRUCTURE_ERRORS = frozenset({
     "RATE_LIMIT",
     "QUOTA_EXHAUSTED",
+    "REQUEST_EXCEEDS_LIMIT",
     "TIMEOUT",
     "NETWORK_ERROR",
     "PROVIDER_ERROR",

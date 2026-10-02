@@ -52,7 +52,15 @@ class MissingRateLimits(RuntimeError):
 
 
 class ImpossibleRequest(RuntimeError):
-    """Tek bir istek bile TPM limitine sigmiyor; hicbir zaman basarili olamaz."""
+    """Tek bir istek bile TPM limitine sigmiyor; hicbir zaman basarili olamaz.
+
+    Bu bir YAPILANDIRMA/KAPASITE durumudur: saglayici hatasi degil, modelin kotu
+    cikti uretmesi de degil. error_class ACIKCA bildirilir; aksi halde sinif adi
+    hicbir sezgiye uymadigi icin UNKNOWN_ERROR / 'bilinmiyor' olarak kaydediliyordu
+    (QuotaExhausted ile ayni aile hatasi).
+    """
+
+    error_class = "REQUEST_EXCEEDS_LIMIT"
 
 
 class QuotaExhausted(RuntimeError):
