@@ -3,6 +3,7 @@ import json
 import pytest
 
 import config
+import llm_timeout
 import metrics
 import runner
 from generators.claude_gen import ClaudeGenerator
@@ -112,11 +113,13 @@ def test_all_providers_use_production_generators_for_both_variants(monkeypatch):
     assert len(rows) == 9
     assert {row["prompt_variant"] for row in rows} >= {"basic", "edge_focused", "traditional"}
     assert calls["openai_request"]["max_completion_tokens"] >= 2048
-    assert calls["openai_client"]["timeout"] == config.REQUEST_TIMEOUT
+    # LLM istemcileri httpbin'in 10 sn'lik REQUEST_TIMEOUT'unu KULLANMAZ.
+    assert calls["openai_client"]["timeout"] == llm_timeout.httpx_timeout_for("OpenAI")
+    assert calls["openai_client"]["timeout"].read > config.REQUEST_TIMEOUT
     assert calls["gemini_request"]["model"] == "gemini-test"
     assert calls["gemini_request"]["config"]["max_output_tokens"] == 8192
     assert calls["claude_request"]["max_tokens"] >= 2048
-    assert calls["claude_client"]["timeout"] == config.REQUEST_TIMEOUT
+    assert calls["claude_client"]["timeout"] == llm_timeout.httpx_timeout_for("Claude")
 
     # Groq shares the production OpenAI adapter but must retain its own routing.
     assert calls["openai_client"]["base_url"] == "https://api.groq.com/openai/v1"

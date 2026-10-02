@@ -44,6 +44,38 @@ assert TOTAL_LLM_MODELS == 8, f"Expected 8 LLM, got {TOTAL_LLM_MODELS}"
 # kosu bu ikisinde bedelsiz, asagidakilerde PARA HARCAR ve acik onay ister.
 PAID_PROVIDERS: set[str] = {"OpenAI", "Claude"}
 
+# Yalnizca FREE TIER ile kosulan saglayicilar. Bu listedeki saglayicilarda
+# fatura tutari HICBIR KOSULDA hesaplanmaz (pricing.cost_for), cost_usd_billed
+# her zaman 0.0 ve cost_basis free_tier_list_equivalent olur. Fiyat tablosuna
+# yanlislikla billed=True yazilsa bile bu liste onu gecersiz kilar.
+FREE_ONLY_PROVIDERS: set[str] = {"Gemini", "Groq"}
+
+assert not (PAID_PROVIDERS & FREE_ONLY_PROVIDERS), (
+    "Bir saglayici hem ucretli hem yalnizca-ucretsiz olamaz: "
+    f"{sorted(PAID_PROVIDERS & FREE_ONLY_PROVIDERS)}"
+)
+
+
+def provider_for_model(model: str) -> str:
+    """Model kimliginden saglayici etiketi; bilinmiyorsa bos string.
+
+    GENERATOR_REGISTRY'yi import etmeden calisir (dairesel import olmasin diye
+    model listelerine bakar).
+    """
+    if model in OPENAI_MODELS:
+        return "OpenAI"
+    if model in GEMINI_MODELS:
+        return "Gemini"
+    if model in GROQ_MODELS:
+        return "Groq"
+    if model in CLAUDE_MODELS:
+        return "Claude"
+    return ""
+
+
+def is_free_only_model(model: str) -> bool:
+    return provider_for_model(model) in FREE_ONLY_PROVIDERS
+
 # ============= BUTCE SIGORTASI (K6) =============
 # Senaryo A butcesi $80. Esikler DEFTERDEKI toplam faturalanan harcamaya gore
 # degerlendirilir (bkz. budget.py). "stop" asildiginda kalan uretim gorevleri
@@ -123,8 +155,44 @@ MAX_PARALLEL_JOBS: int = 1
 REQUEST_TIMEOUT: int = 10
 RETRY_MAX_ATTEMPTS: int = 3
 RETRY_BACKOFF_SECONDS: float = 8.0
+
+# Reaktif 429 yeniden denemeleri AYRI ve DUSUK bir ust sinirla sayilir:
+# bir hiz limiti beklemesi, modelin icerik uretme denemesini tuketmemeli
+# (K7/K9 sayaclariyla karismamali).
+REACTIVE_429_MAX_RETRIES: int = 2
+REACTIVE_429_JITTER_SECONDS: float = 0.5
 MAX_PARALLEL_WORKERS: int = 9
 MAX_PARALLEL_GENERATORS: int = 3
+
+# ============= LLM ISTEMCI TIMEOUT'U =============
+# REQUEST_TIMEOUT (10 sn) runner.py'nin HTTPBIN test cagrilari icindir ve oyle
+# kalir. LLM uretim cagrilari bambaska bir is: 3000 token uretmek 10 saniyeye
+# sigmaz ve sigmadiginda TIMEOUT -> 'altyapi' hatasi uretir. Bu yuzden LLM
+# istemcileri AYRI bir timeout kullanir.
+#
+# Kurulu SDK'larin kendi varsayilanlari (kaynak koddan, 29.09.2026):
+#   openai 1.109.1      -> connect=5, read=600, write=600, pool=600
+#   anthropic 0.120.2   -> connect=5, read=600, write=600, pool=600
+#   google-genai 1.47.0 -> HttpOptions.timeout=None -> httpx'te SONSUZ
+#   groq                -> ayri paket yok; OpenAI SDK + base_url kullaniliyor
+# Asagidaki degerler bu varsayilanlarin en dusugunun altina inmez.
+LLM_REQUEST_TIMEOUT: dict[str, float] = {
+    "connect": 10.0,
+    "read": 600.0,
+    "write": 600.0,
+    "pool": 600.0,
+}
+
+# Saglayici bazinda override (bos = LLM_REQUEST_TIMEOUT gecerli).
+# Anahtar: generator'in _provider_label degeri kucuk harfle ("openai", "groq",
+# "gemini", "claude").
+LLM_REQUEST_TIMEOUT_BY_PROVIDER: dict[str, dict[str, float]] = {}
+
+
+def llm_timeout_for(provider: str) -> dict[str, float]:
+    """Bir saglayici icin efektif LLM timeout sozlugu."""
+    override = LLM_REQUEST_TIMEOUT_BY_PROVIDER.get((provider or "").lower())
+    return dict(override or LLM_REQUEST_TIMEOUT)
 
 MAX_TOKENS_BY_PROVIDER: dict[str, int] = {
     "openai": 16384,

@@ -1,0 +1,67 @@
+{
+  "_comment": [
+    "FREE TIER hiz/kota limitleri. Degerler YALNIZCA saglayicinin kendi hesap",
+    "sayfasindan girilir (Groq: console.groq.com Limits; Gemini: AI Studio Rate",
+    "Limits). Ucuncu taraf sitelerden deger alinmaz.",
+    "",
+    "published_*: saglayicinin YAYIMLADIGI ham deger (guvenlik payi UYGULANMAMIS).",
+    "safety_factor: efektif limit = floor(published * safety_factor). Bos ise",
+    "  safety_factor_default gecerlidir.",
+    "tpm_counts: TPM'in neyi saydigi. Groq dokumani TPM'i toplam (girdi+cikti)",
+    "  olarak tanimlar; Gemini dokumani 'Tokens per minute (input)' der.",
+    "",
+    "Bir FREE_ONLY modelin published_* alanlarindan biri bile null ise o model",
+    "KOSMAZ (main.py EXIT_MISSING_RATE_LIMITS=5).",
+    "",
+    "published_tpd null ise saglayici gunluk token limitini YAYIMLAMAMIS demektir. SINIRSIZ SAYILMAZ: limitor TPD penceresi uygulayamaz ve bunu acikca uyarir; yayimlanmamis bir limit varsa ancak 429 ile ogrenilir ve o yol muhafazakar davranir (kota turu ayirt edilemezse GUN kabul edilir)."
+  ],
+  "safety_factor_default": 0.8,
+  "providers": {
+    "Groq": {
+      "tpm_counts": "total",
+      "source": "kullanici tarafindan saglandi (console.groq.com Limits)",
+      "source_url": "https://console.groq.com/settings/limits",
+      "fetched_date": "2026-09-29",
+      "rpd_reset_rule": "dokumante degil; x-ratelimit-reset-requests basligi sure verir",
+      "models": {
+        "openai/gpt-oss-120b": {
+          "published_rpm": 30,
+          "published_rpd": 1000,
+          "published_tpm": 8000,
+          "published_tpd": 200000,
+          "safety_factor": null
+        },
+        "openai/gpt-oss-20b": {
+          "published_rpm": 30,
+          "published_rpd": 1000,
+          "published_tpm": 8000,
+          "published_tpd": 200000,
+          "safety_factor": null
+        }
+      }
+    },
+    "Gemini": {
+      "tpm_counts": "input_only",
+      "source": "kullanici tarafindan saglandi (AI Studio Rate Limits)",
+      "source_url": "https://ai.google.dev/gemini-api/docs/rate-limits",
+      "fetched_date": "2026-09-29",
+      "rpd_reset_rule": "dokumante: midnight Pacific time",
+      "models": {
+        "gemini-2.5-flash": {
+          "published_rpm": 5,
+          "published_rpd": 2,
+          "published_tpm": 250000,
+          "published_tpd": null,
+          "safety_factor": null
+        },
+        "gemini-3.5-flash-lite": {
+          "published_rpm": 15,
+          "published_rpd": 5,
+          "published_tpm": 250000,
+          "published_tpd": null,
+          "safety_factor": null
+        }
+      }
+    }
+  }
+}

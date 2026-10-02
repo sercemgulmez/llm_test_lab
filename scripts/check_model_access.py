@@ -16,6 +16,7 @@ yalnizca saglayici, model, durum ve redakte edilmis hata sinifi basilir.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 import argparse
 import os
 from pathlib import Path
@@ -27,7 +28,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+import attestation
 import config
+import rate_limiter
 from error_taxonomy import classify_error
 from generators import GENERATOR_REGISTRY
 from security.redaction import redact_secrets
@@ -99,18 +102,46 @@ def _probe_metadata(generator_class: type, model: str, provider: str) -> None:
         client.models.retrieve(model)           # openai / anthropic / groq (OpenAI uyumlu)
 
 
-def _run_model(generator_class: type, model: str, provider: str, allow_paid_generation: bool = False) -> SmokeResult:
+def _free_only_prerequisites(provider: str, model: str, limiter) -> Optional[str]:
+    """FREE_ONLY bir modelde uretim cagrisi yapmanin on kosullari.
+
+    Beyan yoksa ya da yayimlanan limitler girilmemisse cagri YAPILMAZ: biri
+    faturalanma riski, digeri kota korlugu demektir. Eksiklik bir HATA degil,
+    ERTELEME sebebidir (Bolum 9'daki siraya birakilir).
+    """
+    if provider not in config.FREE_ONLY_PROVIDERS:
+        return None
+    if not attestation.is_attested(provider):
+        return f"free-tier beyani yok ({attestation.ENV_VAR})"
+    if not limiter.is_managed(provider, model):
+        return f"{rate_limiter.LIMITS_FILE} icinde yayimlanan limit yok"
+    return None
+
+
+def _run_model(generator_class: type, model: str, provider: str,
+               allow_paid_generation: bool = False, limiter=None) -> SmokeResult:
     env_var = ENV_BY_PROVIDER.get(provider)
     if env_var is None:
         return SmokeResult(provider, model, "FAIL", "CODE_ERROR", "Unknown provider mapping")
     if not os.getenv(env_var):
         return SmokeResult(provider, model, "FAIL", "MISSING_CREDENTIAL", f"{env_var} is not set")
+
+    if limiter is not None:
+        blocker = _free_only_prerequisites(provider, model, limiter)
+        if blocker is not None:
+            return SmokeResult(provider, model, "SKIP", "DEFERRED",
+                               f"atlandi, beyan/limit yok: {blocker}", mode="skipped")
+
     metadata_only = provider in config.PAID_PROVIDERS and not allow_paid_generation
     try:
         if metadata_only:
             _probe_metadata(generator_class, model, provider)
         else:
-            rows = generator_class(model).smoke_test()
+            generator = generator_class(model)
+            if limiter is not None and limiter.is_managed(provider, model):
+                # Erisim kontrolu de kotadan yer yer; limitorden GECER.
+                generator._rate_limiter = limiter
+            rows = generator.smoke_test()
             if len(rows) != 1:
                 raise RuntimeError("Provider response parsing error: smoke normalization returned no row.")
     except Exception as exc:
@@ -136,6 +167,9 @@ def _print_result(result: SmokeResult) -> None:
     mode = f" | {result.mode}" if result.mode else ""
     if result.status == "PASS":
         _emit(f"[PASS] {result.provider} | {result.model}{mode}")
+        return
+    if result.status == "SKIP":
+        _emit(f"[SKIP] {result.provider} | {result.model}{mode} | {result.detail}")
         return
     suffix = f"{mode} | {result.error_class}"
     if result.detail:
@@ -180,10 +214,11 @@ def main(registry=None, only: str | None = None, allow_paid_generation: bool = F
         _emit(f"[FAIL] Registry | configured models | NO_MODELS_TESTED | expected {EXPECTED_MODELS}, found {len(specs)}")
         _print_summary([], EXPECTED_MODELS)
         return 1
+    limiter = rate_limiter.RateLimiter(rate_limiter.load_limits())
     results: list[SmokeResult] = []
     for generator_class, model, provider in specs:
         _emit(f"[RUN] {provider} | {model}")
-        result = _run_model(generator_class, model, provider, allow_paid_generation)
+        result = _run_model(generator_class, model, provider, allow_paid_generation, limiter)
         results.append(result)
         _print_result(result)
     return 0 if _print_summary(results, expected, targeted=targeted) else 1

@@ -3,6 +3,7 @@
 import logging
 from typing import Dict, List
 
+import llm_timeout
 from models import ApiOperation, TokenUsage
 from generators.base import BaseGenerator, ProviderResponseParseError
 from security.secret_loader import get_api_key
@@ -11,12 +12,16 @@ _logger = logging.getLogger(__name__)
 
 try:
     from google import genai  # type: ignore
+    from google.genai import types as genai_types  # type: ignore
 except ImportError:
     genai = None  # type: ignore
+    genai_types = None  # type: ignore
 
 
 class GeminiGenerator(BaseGenerator):
     """Google Gemini API'si ile test senaryosu üretir."""
+
+    _provider_label: str = "Gemini"
 
     def __init__(self, model: str) -> None:
         self.model = model
@@ -27,7 +32,20 @@ class GeminiGenerator(BaseGenerator):
             raise RuntimeError("'google-genai' paketi yüklü değil. pip install google-genai")
         api_key = get_api_key("gemini")
         if self._client is None:
-            self._client = genai.Client(api_key=api_key)
+            # Once hic timeout verilmiyordu: google-genai HttpOptions.timeout=None
+            # birakiyor ve httpx bunu SONSUZ olarak yorumluyor, yani asili kalan
+            # bir istek kosuyu sureklilesirebiliyordu.
+            self._client = genai.Client(
+                api_key=api_key,
+                http_options=genai_types.HttpOptions(
+                    timeout=llm_timeout.genai_timeout_ms_for(self._provider_label),
+                    # google-genai varsayilani zaten retry YAPMIYOR
+                    # (retry_options=None -> stop_after_attempt(1)); burada
+                    # ACIKCA sabitleniyor ki bir surum yukseltmesi sessizce
+                    # gizli yeniden deneme getirmesin.
+                    retry_options=genai_types.HttpRetryOptions(attempts=1),
+                ),
+            )
         return self._client
 
     @staticmethod
@@ -98,6 +116,14 @@ class GeminiGenerator(BaseGenerator):
             reasoning_included_in_output=False,
         )
 
+    def _max_tokens_for(self, num_cases: int) -> int:
+        """Gemini'de cikti tavani SABIT 8192; case sayisiyla olceklenmez.
+
+        Deney parametresi DEGISTIRILMEDI; yalnizca limitorun ayni tavani
+        rezerve edebilmesi icin tek kaynaga tasindi.
+        """
+        return 8192
+
     def _generate_for_operation(
         self,
         op: ApiOperation,
@@ -110,7 +136,7 @@ class GeminiGenerator(BaseGenerator):
         _logger.info("[Gemini - %s - %s] %s (%s %s) üretiliyor...", self.model, variant_name, op.op_id, op.method, op.path)
 
         def request_completion(prompt: str) -> tuple[str, int]:
-            return self._request_completion(prompt, 8192)
+            return self._request_completion(prompt, self._max_tokens_for(num_cases))
 
         return self._generate_cases_with_repair(
             op=op,

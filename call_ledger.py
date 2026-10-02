@@ -21,6 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import llm_timeout
 import pricing
 from checkpoint import _JsonlLog
 from error_taxonomy import classify_error, failure_origin
@@ -139,6 +140,7 @@ class CallLedger:
         latency_ms: int | None = None,
         call_meta: dict | None = None,
         prompt_chars: int = 0,
+        limiter_meta: dict | None = None,
     ) -> None:
         if not self.enabled:
             return
@@ -164,6 +166,16 @@ class CallLedger:
             **usage.to_dict(),
             **self._cost_fields(usage, (call_meta or {}).get("model_requested"),
                                 call_meta, prompt_chars),
+            # ── Limitor / kota alanlari (Bolum 3.6) ──────────────────────
+            # limiter_wait_ms latency_ms'ten AYRIDIR: biri bizim bekletmemiz,
+            # digeri saglayicinin yanit suresi.
+            "limiter_wait_ms": int((limiter_meta or {}).get("limiter_wait_ms") or 0),
+            "reserved_input_tokens": (limiter_meta or {}).get("reserved_input_tokens"),
+            "reserved_output_tokens": (limiter_meta or {}).get("reserved_output_tokens"),
+            "reactive_429_count": int((limiter_meta or {}).get("reactive_429_count") or 0),
+            "retry_after_s": (limiter_meta or {}).get("retry_after_s"),
+            "quota_kind": (limiter_meta or {}).get("quota_kind"),
+            "rate_limit_headers": _clean((limiter_meta or {}).get("rate_limit_headers") or {}),
             "accepted_cases": accepted_cases,
             "rejected_cases": rejected_cases,
             "raw_response": raw[:MAX_RAW_RESPONSE_CHARS],
@@ -188,6 +200,8 @@ class CallLedger:
         latency_ms: int | None = None,
         call_meta: dict | None = None,
         prompt_chars: int = 0,
+        provider_label: str = "",
+        limiter_meta: dict | None = None,
     ) -> str:
         """Yanit alinamayan cagriyi (429, kota, timeout, ag) deftere yazar.
 
@@ -230,6 +244,16 @@ class CallLedger:
             "cost_basis": "cagri_basarisiz_token_bildirilmedi",
             "pricing_available": False,
             "cost_usd_guard_estimate": failed_guard,
+            # ── Limitor / kota alanlari (Bolum 3.6) ──────────────────────
+            # limiter_wait_ms latency_ms'ten AYRIDIR: biri bizim bekletmemiz,
+            # digeri saglayicinin yanit suresi.
+            "limiter_wait_ms": int((limiter_meta or {}).get("limiter_wait_ms") or 0),
+            "reserved_input_tokens": (limiter_meta or {}).get("reserved_input_tokens"),
+            "reserved_output_tokens": (limiter_meta or {}).get("reserved_output_tokens"),
+            "reactive_429_count": int((limiter_meta or {}).get("reactive_429_count") or 0),
+            "retry_after_s": (limiter_meta or {}).get("retry_after_s"),
+            "quota_kind": (limiter_meta or {}).get("quota_kind"),
+            "rate_limit_headers": _clean((limiter_meta or {}).get("rate_limit_headers") or {}),
             "accepted_cases": 0,
             "rejected_cases": 0,
             "raw_response": "",
@@ -237,6 +261,15 @@ class CallLedger:
             "raw_response_length": 0,
             "failed": True,
             "error_class": error_class,
+            # Zaman asiminda: hangi timeout gecerliydi ve hangi asamada koptu.
+            # Sadece TIMEOUT icin doldurulur; digerlerinde None kalir.
+            "timeout_seconds": (
+                llm_timeout.timeout_seconds_for(provider_label or "")
+                if error_class == "TIMEOUT" else None
+            ),
+            "timeout_phase": (
+                llm_timeout.timeout_phase(exc) if error_class == "TIMEOUT" else None
+            ),
             "failure_origin": failure_origin(error_class),
             "error": redact_secrets(str(exc)),
             "cases": [],
@@ -326,6 +359,20 @@ class CallLedger:
                 "unpriced_calls": self._unpriced_calls,
                 "pricing_available": pricing.price_table_ready(),
             }
+
+    def record_run_header(self, header: dict) -> None:
+        """Kosu basligini defterin ILK kaydi olarak yazar.
+
+        Hangi commit'in, hangi limitlerle ve hangi beyanla urettigi sonradan
+        geri getirilemez; o an yazilmazsa kaybolur.
+        """
+        if not self.enabled:
+            return
+        self._safe_append({
+            "ts": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "run_id": self.run_id,
+            **_clean(header),
+        })
 
     def flush(self) -> None:
         if self.enabled:

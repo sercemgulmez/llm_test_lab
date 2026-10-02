@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import config
 from models import TokenUsage
 
 # Maliyet dayanaklari
@@ -161,7 +162,10 @@ def cost_for(model: str, usage: TokenUsage) -> CallCost:
         + usage.billable_output_tokens * price.output_usd_per_mtok
     ) / 1_000_000.0
     list_equivalent = round(list_equivalent, 8)
-    if price.billed:
+    # FREE_ONLY saglayicida fatura ASLA hesaplanmaz. Bu, fiyat tablosundaki
+    # `billed` bayragindan BAGIMSIZ bir ikinci kilit: tabloya yanlislikla
+    # billed=True yazilsa bile burada sifirlanir.
+    if price.billed and not config.is_free_only_model(model or ""):
         return CallCost(list_equivalent, list_equivalent, BASIS_BILLED, True)
     return CallCost(0.0, list_equivalent, BASIS_FREE_TIER, True)
 
@@ -200,7 +204,7 @@ def guard_estimate(model: str, prompt_chars: int, max_output_tokens: int) -> flo
     price = PRICE_TABLE.get(model or "")
     if price is None:
         return None
-    if not price.billed:
+    if not price.billed or config.is_free_only_model(model or ""):
         return 0.0  # free tier: fatura yok, butce riski yok
     input_tokens = (max(0, int(prompt_chars)) / CHARS_PER_TOKEN) * INPUT_SAFETY_FACTOR
     total = (

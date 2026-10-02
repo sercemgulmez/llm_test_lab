@@ -4,6 +4,7 @@ import logging
 from typing import Dict, List
 
 import config
+import llm_timeout
 from models import ApiOperation, TokenUsage
 from generators.base import BaseGenerator, ProviderResponseParseError
 from security.secret_loader import get_api_key
@@ -19,6 +20,8 @@ except ImportError:
 class ClaudeGenerator(BaseGenerator):
     """Anthropic Claude API'si ile test senaryosu üretir."""
 
+    _provider_label: str = "Claude"
+
     def __init__(self, model: str) -> None:
         self.model = model
         self._client = None
@@ -28,7 +31,11 @@ class ClaudeGenerator(BaseGenerator):
             raise RuntimeError("'anthropic' paketi yüklü değil. pip install anthropic")
         api_key = get_api_key("claude")
         if self._client is None:
-            self._client = anthropic.Anthropic(api_key=api_key, timeout=config.REQUEST_TIMEOUT)
+            # config.REQUEST_TIMEOUT DEGIL (bkz. llm_timeout modulu).
+            self._client = anthropic.Anthropic(
+                api_key=api_key,
+                timeout=llm_timeout.httpx_timeout_for(self._provider_label),
+            )
         return self._client
 
     def _request_completion(self, prompt: str, max_tokens: int, smoke: bool = False) -> tuple[str, TokenUsage]:
@@ -81,9 +88,7 @@ class ClaudeGenerator(BaseGenerator):
         _logger.info("[Claude - %s - %s] %s (%s %s) üretiliyor...", self.model, variant_name, op.op_id, op.method, op.path)
 
         def request_completion(prompt: str) -> tuple[str, int]:
-            token_ceiling = config.MAX_TOKENS_BY_PROVIDER.get("claude", 8192)
-            max_tokens = min(token_ceiling, max(2048, num_cases * 200))
-            return self._request_completion(prompt, max_tokens)
+            return self._request_completion(prompt, self._max_tokens_for(num_cases))
 
         return self._generate_cases_with_repair(
             op=op,

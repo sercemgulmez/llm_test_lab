@@ -1,6 +1,7 @@
 from models import ApiOperation
 from generators.base import BaseGenerator
 from generators.openai_gen import OpenAIGenerator
+import llm_timeout
 from generators.gemini_gen import GeminiGenerator
 from generators.claude_gen import ClaudeGenerator
 
@@ -65,8 +66,12 @@ def test_gemini_generator_uses_mocked_client(monkeypatch):
             return type("Resp", (), {"text": 'LOGIN_TC1|Valid|POST /login|-|200|OK'})()
 
     class DummyClient:
-        def __init__(self, api_key):
+        def __init__(self, api_key, http_options=None):
             assert api_key == "gemini-key"
+            # Gemini istemcisi artik ACIK bir timeout aliyor; onceden hic
+            # verilmiyordu ve httpx bunu SONSUZ olarak yorumluyordu.
+            assert http_options is not None, "Gemini istemcisine timeout verilmeli"
+            assert http_options.timeout == llm_timeout.genai_timeout_ms_for("Gemini")
             self.models = DummyModels()
 
     class DummyGenAI:
