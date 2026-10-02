@@ -877,8 +877,11 @@ class BaseGenerator(ABC):
                 )
             except Exception as exc:
                 # Yanit alinamadi: defter bunu KAYBETMEMELI, sonra geri getirilemez.
+                # Siniflandirma defterden BAGIMSIZ hesaplanir: --no-call-ledger ile
+                # kosulsa bile asagidaki karar ayni olmali.
+                error_class = classify_error(exc)
                 if ledger is not None:
-                    error_class = ledger.record_failed_call(
+                    ledger.record_failed_call(
                         generator=generator_name,
                         variant=variant_name,
                         operation_id=op.op_id,
@@ -894,9 +897,30 @@ class BaseGenerator(ABC):
                         provider_label=getattr(self, "_provider_label", ""),
                         limiter_meta=call_meta_extra,
                     )
-                    if failure_origin(error_class) == "altyapi":
-                        had_infrastructure_failure = True
-                raise
+                if failure_origin(error_class) == "altyapi":
+                    had_infrastructure_failure = True
+
+                # Ilk denemede elde hicbir sey yok: yukari tasi, generator
+                # duzeyindeki retry tum operasyonu yeniden denesin.
+                if attempt == 0 or not accepted_rows:
+                    raise
+
+                # SONRAKI denemede zaten kabul edilmis satirlar varsa onlari
+                # ATMAYIZ. Eskiden burada kosulsuz `raise` vardi: repair cagrisi
+                # patlayinca istisna fonksiyondan cikiyor, dongunun ASAGISINDAKI
+                # fallback ve `return final_rows` hic calismiyor ve ANA CAGRININ
+                # urettigi her sey cope gidiyordu. Olculdu: Groq'ta defterde 206
+                # kabul edilmis case varken CSV'ye yalnizca 15 satir girdi.
+                # Ucretli fazda bu, parasi odenmis ciktinin atilmasi demek.
+                # Hata deftere YAZILDI ve altyapi kokeni ISARETLENDI; burada
+                # yalnizca eldeki veri korunur, fallback eksigi tamamlar.
+                _logger.warning(
+                    "  [%s] %s %d. deneme basarisiz (%s) — ELDEKI %d satir KORUNUYOR, "
+                    "eksik %d satir fallback ile tamamlanacak.",
+                    generator_name, op.op_id, attempt + 1, error_class,
+                    len(accepted_rows), max(0, num_cases - len(accepted_rows)),
+                )
+                break
             # latency_ms SAF saglayici suresidir: limitor beklemesi ayri alanda
             # tutulur, aksi halde "model ne kadar yavas" sorusu cevaplanamaz.
             latency_ms = max(
