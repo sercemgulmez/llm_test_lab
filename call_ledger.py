@@ -176,6 +176,11 @@ class CallLedger:
             "retry_after_s": (limiter_meta or {}).get("retry_after_s"),
             "quota_kind": (limiter_meta or {}).get("quota_kind"),
             "rate_limit_headers": _clean((limiter_meta or {}).get("rate_limit_headers") or {}),
+            # Bulgu 1: model JSON'un icine kod ifadesi yazdiginda nesne-bazli
+            # kurtarma devreye girer. discarded_cases, GECERSIZ JSON yuzunden
+            # atilan case sayisidir — "model kotu cikti uretti" olcumu budur.
+            "salvaged_cases": int((limiter_meta or {}).get("salvaged_cases") or 0),
+            "discarded_cases": int((limiter_meta or {}).get("discarded_cases") or 0),
             "accepted_cases": accepted_cases,
             "rejected_cases": rejected_cases,
             "raw_response": raw[:MAX_RAW_RESPONSE_CHARS],
@@ -254,6 +259,11 @@ class CallLedger:
             "retry_after_s": (limiter_meta or {}).get("retry_after_s"),
             "quota_kind": (limiter_meta or {}).get("quota_kind"),
             "rate_limit_headers": _clean((limiter_meta or {}).get("rate_limit_headers") or {}),
+            # Bulgu 1: model JSON'un icine kod ifadesi yazdiginda nesne-bazli
+            # kurtarma devreye girer. discarded_cases, GECERSIZ JSON yuzunden
+            # atilan case sayisidir — "model kotu cikti uretti" olcumu budur.
+            "salvaged_cases": int((limiter_meta or {}).get("salvaged_cases") or 0),
+            "discarded_cases": int((limiter_meta or {}).get("discarded_cases") or 0),
             "accepted_cases": 0,
             "rejected_cases": 0,
             "raw_response": "",
@@ -417,6 +427,11 @@ def summarize_by_generator(records: list[dict]) -> list[dict]:
             "accepted_cases": accepted,
             "rejected_cases": rejected,
             "acceptance_rate": round(accepted / offered, 4) if offered else None,
+            "discarded_cases": (discarded := sum(int(r.get("discarded_cases") or 0) for r in api_calls)),
+            "salvaged_cases": sum(int(r.get("salvaged_cases") or 0) for r in api_calls),
+            "discarded_share": (
+                round(discarded / (accepted + discarded), 4) if (accepted + discarded) else None
+            ),
             "fallback_cases": fallback_cases,
             "total_cases": produced,
             "fallback_share": round(fallback_cases / produced, 4) if produced else None,

@@ -426,6 +426,18 @@ def check_call_ledger(
         )
 
     for item in summary:
+        share = item.get("discarded_share")
+        if item.get("discarded_cases"):
+            findings.add(
+                "UYARI",
+                f"'{item['generator']}': {item['discarded_cases']} case GECERSIZ JSON "
+                f"yuzunden atildi"
+                + (f" (atilma orani {share:.1%})" if share is not None else "")
+                + ". Model JSON icine kod ifadesi yazmis olabilir "
+                "(ornegin \"a\".repeat(2000)); kurtarma yalnizca bozuk nesneyi duser.",
+            )
+
+    for item in summary:
         if not item["token_split_available"] and item["api_calls"]:
             findings.add(
                 "UYARI",

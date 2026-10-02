@@ -3,6 +3,7 @@
 import json
 import logging
 import random
+import threading
 import re
 import time
 from abc import ABC, abstractmethod
@@ -294,14 +295,31 @@ def extract_json_array(text: str) -> list:
     return []
 
 
-# En son kurtarma denemesinin istatistigi (yalnizca raporlama/olcum icin).
-# Tek seferlik okunur: parse_llm_json_to_rows bunu defterdeki dogrulama
-# ozetine yazar.
-_LAST_SALVAGE: Dict[str, int] = {"recovered": 0, "discarded": 0}
+# En son kurtarma denemesinin istatistigi.
+# ISPARCACIGI BASINA tutulur: uretim ThreadPoolExecutor ile paralel kosuyor ve
+# modul duzeyinde tek bir sozluk, komsu is parcaciginin sayacini okumaya yol
+# acardi (defterde yanlis generator'a yazilmis "gecersiz case" demek olurdu).
+_SALVAGE_STATE = threading.local()
+
+
+def _salvage_slot() -> Dict[str, int]:
+    slot = getattr(_SALVAGE_STATE, "stats", None)
+    if slot is None:
+        slot = {"recovered": 0, "discarded": 0}
+        _SALVAGE_STATE.stats = slot
+    return slot
 
 
 def last_salvage_stats() -> Dict[str, int]:
-    return dict(_LAST_SALVAGE)
+    """Bu is parcaciginin EN SON kurtarma denemesi."""
+    return dict(_salvage_slot())
+
+
+def reset_salvage_stats() -> None:
+    """Cagri oncesi sifirla; aksi halde onceki cagrinin sayisi deftere tasinir."""
+    slot = _salvage_slot()
+    slot["recovered"] = 0
+    slot["discarded"] = 0
 
 
 def _split_top_level_objects(text: str) -> List[str]:
@@ -352,8 +370,9 @@ def _salvage_json_objects(text: str) -> list:
             recovered.append(item)
         else:
             discarded += 1
-    _LAST_SALVAGE["recovered"] = len(recovered)
-    _LAST_SALVAGE["discarded"] = discarded
+    slot = _salvage_slot()
+    slot["recovered"] = len(recovered)
+    slot["discarded"] = discarded
     if recovered or discarded:
         _logger.warning(
             "  [ayristirma] JSON butunuyle gecersiz; nesne-bazli kurtarma: "
@@ -824,6 +843,7 @@ class BaseGenerator(ABC):
         initial_valid_count = 0
         repair_added = 0
         invalid_case_count = 0
+        discarded_total = 0   # gecersiz JSON yuzunden atilan case (Bulgu 1)
         validation_error_summary: dict[str, int] = {}
 
         ledger = getattr(self, "_call_ledger", None)
@@ -886,7 +906,14 @@ class BaseGenerator(ABC):
             )
             usage = TokenUsage.coerce(used_tokens)
             call_usages.append(usage)
+            # Kurtarma sayaci BU cagri icin olculsun: onceki cagrinin sayisi
+            # deftere tasinmamali.
+            reset_salvage_stats()
             parsed_rows = parse_llm_json_to_rows(text, op, generator_name)
+            salvage = last_salvage_stats()
+            call_meta_extra["salvaged_cases"] = salvage["recovered"]
+            call_meta_extra["discarded_cases"] = salvage["discarded"]
+            discarded_total += salvage["discarded"]
             source_label = "generated" if attempt == 0 else "repaired"
             for row in parsed_rows:
                 metadata = row.get("generation_metadata") if isinstance(row.get("generation_metadata"), dict) else {}
@@ -999,6 +1026,7 @@ class BaseGenerator(ABC):
                 "generated_cases": len(final_rows),
                 "valid_cases": len(final_rows),
                 "invalid_cases": invalid_case_count,
+                "discarded_cases": discarded_total,
                 "repaired_cases": repair_added,
                 "fallback_cases": len(fallback_rows),
                 "fallback_origin": (
@@ -1038,6 +1066,9 @@ class BaseGenerator(ABC):
             "retry_after_s": None,
             "quota_kind": None,
             "rate_limit_headers": {},
+            # Gecersiz JSON yuzunden kurtarilan / atilan case sayisi (Bulgu 1).
+            "salvaged_cases": 0,
+            "discarded_cases": 0,
         }
         if limiter is None or not limiter.is_managed(provider, model):
             text, usage = request_completion(prompt)

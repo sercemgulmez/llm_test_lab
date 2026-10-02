@@ -3,7 +3,6 @@
 import logging
 from typing import Dict, List
 
-import config
 import llm_timeout
 from models import ApiOperation, TokenUsage
 from generators.base import BaseGenerator, ProviderResponseParseError

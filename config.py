@@ -200,6 +200,20 @@ def llm_timeout_for(provider: str) -> dict[str, float]:
     override = LLM_REQUEST_TIMEOUT_BY_PROVIDER.get((provider or "").lower())
     return dict(override or LLM_REQUEST_TIMEOUT)
 
+# METODOLOJI NOTU: Groq reasoning modellerinde (gpt-oss) reasoning butcesi
+# output'u tuketiyordu — olculdu: max_tokens=3000 iken out_token=3000'in ~1500'u
+# reasoning'e gidiyor ve yanit finish_reason='length' ile kesiliyordu. max_tokens
+# artirildi, CASE SAYISI DEGISMEDI (15).
+#
+# Ust sinir TPM'den geliyor: limitor TPM'e karsi (girdi tahmini + max_tokens)
+# rezerve eder. Groq'un yayimlanan TPM'i 8000, efektif (x0.8) 6400:
+#   ana cagri    girdi rezervi  761 -> max_tokens <= 5639
+#   repair cagri girdi rezervi 2664 -> max_tokens <= 3736
+# Repair cagrilarinin da calismasi gerektigi icin 3700 secildi. 8192 istenmisti
+# ama 761+8192=8953, YAYIMLANAN 8000'i bile asiyor: hicbir guvenlik payiyla
+# sigmiyor ve on kontrol her Groq cagrisini reddederdi.
+GROQ_MAX_OUTPUT_TOKENS: int = 3700
+
 MAX_TOKENS_BY_PROVIDER: dict[str, int] = {
     "openai": 16384,
     "gemini": 8192,
