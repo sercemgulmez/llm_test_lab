@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- YALNIZCA KURULUM KANITI ICIN. Gercek plist ile ayni sarmalayiciyi
+       cagirir ama 120 saniyede bir tetiklenir; kanit alindiktan sonra
+       bosaltilir (launchctl bootout). -->
+  <key>Label</key>
+  <string>com.llmtestlab.freephase.test</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/suleymansercemgulmez/Projeler/llm_test_lab/scripts/free_phase_tick.sh</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>120</integer>
+  <key>WorkingDirectory</key>
+  <string>/Users/suleymansercemgulmez/Projeler/llm_test_lab</string>
+  <key>StandardOutPath</key>
+  <string>/Users/suleymansercemgulmez/Projeler/llm_test_lab/outputs/.progress/launchd_test.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/suleymansercemgulmez/Projeler/llm_test_lab/outputs/.progress/launchd_test.log</string>
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

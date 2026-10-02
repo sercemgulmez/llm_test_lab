@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.llmtestlab.freephase</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/suleymansercemgulmez/Projeler/llm_test_lab/scripts/free_phase_tick.sh</string>
+  </array>
+
+  <!-- Gunluk tetikleyici 11:10 ve guvenlik kontrolu 16:10 (YEREL saat).
+       11:10 secimi: Gemini'nin RPD'si gece yarisi Pasifik'te sifirlanir; bu an
+       yerel saatte PDT'de 10:00, PST'de 11:00'dir. Sabit 11:10 her iki rejimde
+       de sifirlamadan SONRA kalir (PDT'de 01:10, PST'de 00:10 Pasifik).
+       10:05 gibi daha erken bir saat PST'ye gecildiginde 23:05 Pasifik'e, yani
+       sifirlamadan ONCEYE duserdi.
+       16:10 yalnizca RPM/TPM icindir; RPD beklemez. -->
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict>
+      <key>Hour</key><integer>11</integer>
+      <key>Minute</key><integer>10</integer>
+    </dict>
+    <dict>
+      <key>Hour</key><integer>16</integer>
+      <key>Minute</key><integer>10</integer>
+    </dict>
+  </array>
+
+  <!-- Yalnizca SIFIR-DISI cikista yeniden dener (man launchd.plist: SuccessfulExit
+       false => ters kosulda yeniden baslat). Sarmalayici normalde her zaman 0 ile
+       cikar, dolayisiyla bu yalnizca gercek cokme/oldurulme durumunda devreye girer.
+       KeepAlive=true KULLANILMIYOR: kisa omurlu isi sonsuz donguye sokardi. -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <!-- Cokme durumunda hizli dongu olmasin (saniye). -->
+  <key>ThrottleInterval</key>
+  <integer>600</integer>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/suleymansercemgulmez/Projeler/llm_test_lab</string>
+
+  <key>StandardOutPath</key>
+  <string>/Users/suleymansercemgulmez/Projeler/llm_test_lab/outputs/.progress/launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/suleymansercemgulmez/Projeler/llm_test_lab/outputs/.progress/launchd.log</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>
