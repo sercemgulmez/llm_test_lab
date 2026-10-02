@@ -160,6 +160,12 @@ RETRY_BACKOFF_SECONDS: float = 8.0
 # bir hiz limiti beklemesi, modelin icerik uretme denemesini tuketmemeli
 # (K7/K9 sayaclariyla karismamali).
 REACTIVE_429_MAX_RETRIES: int = 2
+
+# Limitorun BLOKLAYARAK bekleyebilecegi en uzun sure. Bunu asan bir bekleme
+# "bugun bu modelde kota kalmadi" demektir: beklemek yerine gorev birakilir,
+# next_available_at yazilir ve kosu biter. Boylece hicbir calistirma saatlerce
+# ya da gunlerce asili kalmaz; zamanlayici (launchd) sonraki firsatta devam eder.
+LIMITER_MAX_WAIT_SECONDS: float = 300.0
 REACTIVE_429_JITTER_SECONDS: float = 0.5
 MAX_PARALLEL_WORKERS: int = 9
 MAX_PARALLEL_GENERATORS: int = 3
