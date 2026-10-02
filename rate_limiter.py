@@ -64,6 +64,10 @@ class QuotaExhausted(RuntimeError):
     sonraki firsatta devam eder.
     """
 
+    # Siniflandirmayi ACIKCA bildirir: aksi halde sinif adindaki "quota"
+    # yuzunden BILLING_QUOTA_ERROR (fatura/kredi sorunu) sayiliyordu.
+    error_class = "QUOTA_EXHAUSTED"
+
     def __init__(self, message: str, next_available_at: str, wait_s: float) -> None:
         super().__init__(message)
         self.next_available_at = next_available_at

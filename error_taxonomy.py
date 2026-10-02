@@ -10,6 +10,7 @@ from __future__ import annotations
 # Altyapi kaynakli (yeniden denenebilir / gecici) hata siniflari.
 INFRASTRUCTURE_ERRORS = frozenset({
     "RATE_LIMIT",
+    "QUOTA_EXHAUSTED",
     "TIMEOUT",
     "NETWORK_ERROR",
     "PROVIDER_ERROR",
@@ -27,8 +28,35 @@ CONTENT_ERRORS = frozenset({
 })
 
 
+def _status_code_of(exc: Exception):
+    """HTTP durum kodunu bul.
+
+    SDK'lar farkli alan kullaniyor: openai/anthropic `status_code`, google-genai
+    ise `code`. Yalnizca `status_code`'a bakmak Gemini'nin 503'unu goremiyordu
+    ve hata UNKNOWN_ERROR/'bilinmiyor' olarak siniflaniyordu.
+    `code` ayni zamanda metin hata kodu da olabilir ("insufficient_quota"),
+    bu yuzden yalnizca sayisal oldugunda durum kodu sayilir.
+    """
+    for attribute in ("status_code", "status", "code"):
+        value = getattr(exc, attribute, None)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str) and value.strip().isdigit():
+            return int(value.strip())
+    return None
+
+
 def classify_error(exc: Exception) -> str:
-    status = getattr(exc, "status_code", None)
+    # Kendi istisnalarimiz sinifi ACIKCA bildirir. Bu, sinif ADINA bakan
+    # sezgisel eslesmeden once gelir: ornegin QuotaExhausted'in adinda "quota"
+    # geciyor diye BILLING_QUOTA_ERROR (fatura/kredi sorunu) sayilmasi yanlisti.
+    declared = getattr(exc, "error_class", None)
+    if isinstance(declared, str) and declared:
+        return declared
+
+    status = _status_code_of(exc)
     code = str(getattr(exc, "code", "") or "").lower()
     name = exc.__class__.__name__.lower()
     message = str(exc).lower()

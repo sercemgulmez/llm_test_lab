@@ -276,7 +276,91 @@ def extract_json_array(text: str) -> list:
         if parsed is not None:
             return parsed
 
+    # NESNE-BAZLI KURTARMA
+    # Modeller zaman zaman JSON'un icine kod ifadesi yaziyor, ornegin
+    # "long_param": "a".repeat(2000). Bu, butun diziyi gecersiz JSON yapar ve
+    # json.loads tek bir noktada patlayinca 15 case'in TAMAMI kaybolurdu.
+    # Burada dizi tek tek nesnelere ayrilir: yalnizca BOZUK nesne duser,
+    # digerleri kurtulur.
+    #
+    # Bilerek yapilmayan sey: bozuk ifadeyi yorumlamak. "a".repeat(2000) degerini
+    # literal'e cevirmek, modelin gecersiz cikti urettigini gizlerdi; o olcum
+    # korunsun diye nesne atilir ve sayisi dondurulur (bkz. last_salvage_stats).
+    # Yalnizca GERCEKTEN bir dizi aralığı varsa kurtarmayi dene. Aksi halde
+    # (ornegin eski boru-isaretli bicim) JSON olmayan metinden nesne ayiklayip
+    # kendi ayristiricisinin isini elinden alirdi.
+    if start != -1 and end != -1 and end > start:
+        return _salvage_json_objects(text[start : end + 1])
     return []
+
+
+# En son kurtarma denemesinin istatistigi (yalnizca raporlama/olcum icin).
+# Tek seferlik okunur: parse_llm_json_to_rows bunu defterdeki dogrulama
+# ozetine yazar.
+_LAST_SALVAGE: Dict[str, int] = {"recovered": 0, "discarded": 0}
+
+
+def last_salvage_stats() -> Dict[str, int]:
+    return dict(_LAST_SALVAGE)
+
+
+def _split_top_level_objects(text: str) -> List[str]:
+    """Bir JSON dizisinin govdesini ust duzey { ... } parcalarina ayirir.
+
+    String icindeki suslu parantezleri ve kacis karakterlerini sayar; bu yuzden
+    gecersiz JSON'da da calisir.
+    """
+    chunks: List[str] = []
+    depth = 0
+    in_string = False
+    escaped = False
+    start_index = -1
+    for index, char in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            if depth == 0:
+                start_index = index
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0 and start_index != -1:
+                chunks.append(text[start_index : index + 1])
+                start_index = -1
+    return chunks
+
+
+def _salvage_json_objects(text: str) -> list:
+    """Bozuk bir JSON dizisinden ayri ayri gecerli nesneleri toplar."""
+    recovered: list = []
+    discarded = 0
+    for chunk in _split_top_level_objects(text or ""):
+        try:
+            item = json.loads(chunk)
+        except (json.JSONDecodeError, ValueError):
+            discarded += 1
+            continue
+        if isinstance(item, dict):
+            recovered.append(item)
+        else:
+            discarded += 1
+    _LAST_SALVAGE["recovered"] = len(recovered)
+    _LAST_SALVAGE["discarded"] = discarded
+    if recovered or discarded:
+        _logger.warning(
+            "  [ayristirma] JSON butunuyle gecersiz; nesne-bazli kurtarma: "
+            "%d case kurtarildi, %d case ATILDI (gecersiz JSON degeri).",
+            len(recovered), discarded,
+        )
+    return recovered
 
 
 def normalize_generated_case(case: dict, op: ApiOperation, generator_name: str) -> dict:
@@ -763,6 +847,10 @@ class BaseGenerator(ABC):
             self._check_budget()
             started_at = time.perf_counter()
             call_meta_extra: dict = {}
+            # Onceki cagrinin meta'si (model_returned, response_id, finish_reason,
+            # sampling) BU cagriya tasinmamali: istek hic gonderilmezse —ornegin
+            # kota yuzunden— defter kaydi eski cagrinin kimligini gosteriyordu.
+            self._last_call_meta = None
             try:
                 text, used_tokens, call_meta_extra = self._rate_limited_call(
                     request_completion, prompt, num_cases
