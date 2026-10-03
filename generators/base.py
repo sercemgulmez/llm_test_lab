@@ -207,6 +207,8 @@ def build_llm_prompt(op: ApiOperation, num_cases: int, variant_name: str, varian
         f"- Security tanimliysa en az bir auth negative case uret.\n"
         f"- expected.status ve expected.allowed_statuses yalnizca operation response status kodlarindan secilsin.\n"
         f"- expected.assertions listesi en az bir status_code assertion'i icersin.\n"
+        f"- Desteklenen assertion type degerleri yalnizca status_code, json_path_exists, json_path_equals, response_contains ve content_type_contains olsun.\n"
+        f"- response_schema_check yalnizca operasyon kontratinda response_schemas dolu ve beklenen status 2xx ise true olsun; aksi halde false olsun. Bu assertion degil, expected icinde boolean alandir.\n"
         f"- tc_id formatini {op.op_id}_TCn olarak kullan.\n\n"
         f"JSON format ornegi:\n{example_array}"
     )
