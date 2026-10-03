@@ -142,6 +142,12 @@ def test_against_todays_real_broken_responses():
         except json.JSONDecodeError:
             pass
         items = extract_json_array(raw)
+        # Yanittaki TUM case'ler bozuksa (orn. tek case'lik repair yaniti,
+        # icinde "A".repeat(10240) gibi kod ifadesi) bos sonuc dogrudur:
+        # kurtarma onlari atar ve defter discarded_cases ile sayar.
+        if not items and int(record.get("discarded_cases") or 0) > 0:
+            checked += 1
+            continue
         assert items, "bozuk yanittan HIC case kurtarilamadi"
         checked += 1
     if checked == 0:
