@@ -90,3 +90,35 @@ prompt kabul edilen case sayısıyla büyüyor.
 Ana çağrı kurtarma mekanizması (geçersiz JSON'dan nesne-bazlı kurtarma) yeterli
 olduğu için şu an veri kaybına yol açmıyor (0 fallback, 158/158 case kabul).
 İleride fallback oranı yükselirse bu kısıt yeniden değerlendirilmeli.
+
+## 4. `gemini-2.5-flash | edge_focused` ikinci kez atıldı ve ücretli tier'da üretildi (3 Ekim 2026)
+
+**Ne oldu:** Bu görev 3 Ekim 15:15'te bir kez `--discard-task` ile yeniden
+koşuldu (nesil 1). Faturalandırma o saatte açılmış olmasına rağmen proje hâlâ
+free tier kotasındaydı: 429 yanıtları `quotaId:
+GenerateRequestsPerMinutePerProjectPerModel-FreeTier`, `quotaValue: 5` taşıyordu.
+EP1, EP3 ve EP5 ana çağrıları tüm denemelerde 429 aldığı için bu operasyonlar
+**0 satır** üretti ve fallback'e de uğramadı; görev 30/75 satırla (2 fallback)
+"tamamlandı" olarak kaydedildi.
+
+**Karar:** AI Studio "Gemini API Paid Tier activated" onayından sonra görev
+operatör kararıyla **ikinci kez** atıldı (`--discard-task`, nesil 2) ve
+yalnızca `--generators gemini:gemini-2.5-flash` ile koşuldu. `--retry-infra-fallback`
+kullanılamadı: görevin `retry_count`'u ilk atmada zaten 1 olmuştu.
+
+**Sonuç (15:47–15:48):** 11 çağrı, hepsi HTTP 200, 0 başarısız, 0 fallback;
+75/75 satır. Defterdeki faturalanan maliyet $0.1616.
+
+**Teze etkisi:**
+- Bu görevin satırları **ücretli tier koşullarında** üretildi; aynı modelin
+  `basic` görevi (75 satır, 33 fallback) ise free tier kısıtı altında üretildi.
+  Üretim parametreleri (prompt, `max_output_tokens=8192`, case sayısı 15) aynı;
+  fark yalnızca kota ortamı. gemini-2.5-flash'ın fallback payı bu yüzden
+  variant'lar arasında asimetriktir (basic %44, edge_focused %0, toplam 33/150 = %22)
+  ve bu asimetri altyapı kaynaklıdır, model kalitesi değildir.
+- Görevin iki kez atılmış olması seçilim yanlılığı riski taşır; ancak her iki
+  atma da **altyapı** kaynaklıdır (free tier 429), içerik kaynaklı bir sonucu
+  eleme amacı taşımaz. Atılan 30 satırın içerik kalitesine bakılarak karar
+  verilmedi.
+- Koşu başlığı çalışma ağacını KİRLİ kaydetti (`tests/test_json_salvage.py`,
+  `.claude/settings.local.json`); ikisi de üretim hattını etkilemez.
