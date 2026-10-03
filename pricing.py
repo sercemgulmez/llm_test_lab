@@ -114,17 +114,20 @@ PRICE_TABLE: dict[str, ModelPrice] = {
         second_source_url=_OPENROUTER_MODELS,
     ),
 
-    # ── Google Gemini (FREE TIER ile kosuluyor) ─────────────────────────────
+    # ── Google Gemini (3 Ekim 2026'dan beri UCRETLI) ────────────────────────
+    # Projeye faturalandirma acildi; free tier'in RPD'si (gunde 1-4 istek)
+    # 10 gunluk bir kosu demekti. billed=True olmasi sart: aksi halde defter
+    # her cagriya $0.00 yazar ve butce sigortasi bu harcamayi gormez.
     # Cikti satirinin basligi birebir: "Output price (including thinking tokens)".
     # Vertex AI sayfasi ayni tutari "Text output (response and reasoning)" diye
     # verir — dusunme token'inin cikti fiyatindan faturalandiginin ikinci teyidi.
     "gemini-2.5-flash": ModelPrice(
-        0.30, 2.50, billed=False,
+        0.30, 2.50, billed=True,
         source_url=_GEMINI_PRICING, fetched_date=_FETCHED,
         second_source_url=_VERTEX_PRICING,
     ),
     "gemini-3.5-flash-lite": ModelPrice(
-        0.30, 2.50, billed=False,
+        0.30, 2.50, billed=True,
         source_url=_GEMINI_PRICING, fetched_date=_FETCHED,
         second_source_url=_VERTEX_PRICING,
     ),

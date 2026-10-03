@@ -53,7 +53,12 @@ def test_effective_limits_apply_safety_factor():
 # ── free_tier_limits.json ────────────────────────────────────────────────
 
 def test_repo_limits_file_covers_every_free_only_model():
-    """Dosya, FREE_ONLY her model icin yayimlanan limitleri tasimali."""
+    """Dosya, FREE_ONLY her model icin yayimlanan limitleri tasimali.
+
+    Gemini 3 Ekim 2026'da ucretli tier'a gecti ve dosyadan cikarildi; limitor
+    yalnizca FREE_ONLY saglayicilari yonetir, ucretlilerde koruma butce
+    sigortasidir.
+    """
     import config
     from generators import GENERATOR_REGISTRY
 
@@ -67,16 +72,33 @@ def test_repo_limits_file_covers_every_free_only_model():
     assert rate_limiter.missing_fields() == {}, "zorunlu alanlarin hepsi dolu olmali"
 
 
-def test_unknown_tpd_is_not_treated_as_unlimited():
-    """Gemini gunluk token limitini yayimlamiyor: BILINMIYOR, sinirsiz DEGIL."""
-    limits = rate_limiter.load_limits()
-    gemini = limits[("Gemini", "gemini-2.5-flash")]
-    assert gemini.published_tpd is None
-    assert gemini.tpd_known is False
-    assert gemini.effective_tpd is None, "None = bilinmiyor; buyuk bir sayi UYDURULMAZ"
-    groq = limits[("Groq", "openai/gpt-oss-20b")]
-    assert groq.tpd_known is True
-    assert groq.effective_tpd == int(groq.published_tpd * groq.safety_factor)
+def test_unknown_tpd_is_not_treated_as_unlimited(tmp_path):
+    """Yayimlanmamis gunluk token limiti BILINMIYOR demektir, sinirsiz DEGIL.
+
+    (Bu durum Gemini free tier'da gercekti; Gemini 3 Ekim 2026'da ucretli tier'a
+    gecip free_tier_limits.json'dan cikarildigi icin test artik sentetik bir
+    dosyayla kosuyor — mantik aynen gecerli.)
+    """
+    path = tmp_path / "limits.json"
+    path.write_text(json.dumps({
+        "safety_factor_default": 0.8,
+        "providers": {"X": {"tpm_counts": "input_only", "models": {
+            "tpd-yok": {"published_rpm": 5, "published_rpd": 2,
+                        "published_tpm": 250_000, "published_tpd": None},
+            "tpd-var": {"published_rpm": 30, "published_rpd": 1000,
+                        "published_tpm": 8000, "published_tpd": 200_000},
+        }}},
+    }), encoding="utf-8")
+    limits = rate_limiter.load_limits(path)
+
+    unknown = limits[("X", "tpd-yok")]
+    assert unknown.published_tpd is None
+    assert unknown.tpd_known is False
+    assert unknown.effective_tpd is None, "None = bilinmiyor; buyuk bir sayi UYDURULMAZ"
+
+    known = limits[("X", "tpd-var")]
+    assert known.tpd_known is True
+    assert known.effective_tpd == int(known.published_tpd * known.safety_factor)
 
 
 def test_unknown_tpd_does_not_block_reservations():

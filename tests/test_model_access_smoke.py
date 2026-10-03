@@ -64,7 +64,10 @@ def _free_tier_ready(monkeypatch):
 
     monkeypatch.setenv("ATTEST_FREE_TIER", "gemini,groq")
     limits = {}
-    for provider, counts in (("Gemini", "input_only"), ("Groq", "total")):
+    # 3 Ekim 2026: yalnizca Groq FREE_ONLY. Gemini ucretli tier'a gecti, yani
+    # artik beyan de limit de gerektirmiyor; ucretliler gibi metadata yolundan
+    # gecer (ya da --paid-generation ile uretim yapar).
+    for provider, counts in (("Groq", "total"),):
         for index in range(2):
             key = (provider, f"model-{index}")
             limits[key] = rate_limiter.ModelLimits(
@@ -220,9 +223,10 @@ def test_paid_providers_never_generate_by_default(monkeypatch, capsys):
     assert smoke.main(_registry(_Tracking)) == 0
     output = capsys.readouterr().out
 
-    # 4 ucretsiz model (Gemini x2, Groq x2) uretti; 4 ucretli (OpenAI, Claude) URETMEDI.
-    assert len(generated) == 4, f"ucretli saglayici uretim yapti: {generated}"
-    assert output.count("metadata") >= 4
+    # 2 ucretsiz model (Groq x2) uretti; 6 ucretli (OpenAI x2, Claude x2,
+    # Gemini x2) URETMEDI — Gemini artik ucretli.
+    assert len(generated) == 2, f"ucretli saglayici uretim yapti: {generated}"
+    assert output.count("metadata") >= 6
     assert "PAID" in output and "free" in output
 
 
@@ -276,7 +280,7 @@ def test_free_only_models_are_deferred_without_attestation(monkeypatch, capsys):
     output = capsys.readouterr().out
 
     assert generated == [], "beyan yokken hicbir FREE_ONLY uretim cagrisi olmamali"
-    assert output.count("[SKIP]") == 4, "Gemini x2 + Groq x2 ertelenmeli"
+    assert output.count("[SKIP]") == 2, "yalnizca Groq x2 ertelenir (Gemini artik ucretli)"
     assert "beyan/limit yok" in output
 
 
@@ -319,7 +323,7 @@ def test_free_only_generation_goes_through_the_limiter(monkeypatch, capsys):
     assert smoke.main(_registry(_Tracking)) == 0
     capsys.readouterr()
 
-    assert len(seen_limiters) == 4, "4 FREE_ONLY model uretim cagrisi yapmali"
+    assert len(seen_limiters) == 2, "2 FREE_ONLY model (Groq) uretim cagrisi yapmali"
     assert all(limiter is not None for limiter in seen_limiters), (
         "erisim kontrolu de kotadan yer yer; limitorden gecmeli"
     )
@@ -337,5 +341,5 @@ def test_paid_models_never_need_attestation(monkeypatch, capsys):
     smoke.main(_registry())
     output = capsys.readouterr().out
 
-    assert output.count("[PASS]") == 4, "OpenAI x2 + Claude x2 metadata ile gecmeli"
-    assert output.count("metadata") >= 4
+    assert output.count("[PASS]") == 6, "OpenAI x2 + Claude x2 + Gemini x2 metadata ile gecmeli"
+    assert output.count("metadata") >= 6

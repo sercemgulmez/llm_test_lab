@@ -124,7 +124,8 @@ def test_second_rerun_is_refused():
     ("OpenAIGenerator:gpt-4.1|basic", True),
     ("ClaudeGenerator:claude-haiku-4-5|basic", True),
     ("GroqGenerator:openai/gpt-oss-20b|basic", False),
-    ("GeminiGenerator:gemini-2.5-flash|basic", False),
+    # 3 Ekim 2026: Gemini projesine faturalandirma acildi -> UCRETLI.
+    ("GeminiGenerator:gemini-2.5-flash|basic", True),
 ])
 def test_paid_provider_detection(task_key, expected_paid):
     assert main._task_is_paid(task_key) is expected_paid

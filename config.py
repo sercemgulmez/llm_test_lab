@@ -42,13 +42,21 @@ assert TOTAL_LLM_MODELS == 8, f"Expected 8 LLM, got {TOTAL_LLM_MODELS}"
 
 # Ucretli saglayicilar. Groq ve Gemini free-tier ile kosuluyor; bir yeniden
 # kosu bu ikisinde bedelsiz, asagidakilerde PARA HARCAR ve acik onay ister.
-PAID_PROVIDERS: set[str] = {"OpenAI", "Claude"}
+# 3 Ekim 2026: Gemini projesine FATURALANDIRMA ACILDI (free tier'in RPD'si
+# gunde 1-4 istege dusuyordu ve 10 gunluk bir kosu demekti). Bu yuzden Gemini
+# FREE_ONLY'den cikarilip UCRETLI saglayicilara alindi.
+#
+# Bu tek satirlik degisiklik kritik: Gemini FREE_ONLY listesinde kalsaydi
+# pricing.cost_for her Gemini cagrisina cost_usd_billed=0.0 yazardi, yani
+# gercek para harcanirken defter $0.00 gosterir ve butce sigortasi Gemini
+# harcamasini HIC GORMEZDI.
+PAID_PROVIDERS: set[str] = {"OpenAI", "Claude", "Gemini"}
 
 # Yalnizca FREE TIER ile kosulan saglayicilar. Bu listedeki saglayicilarda
 # fatura tutari HICBIR KOSULDA hesaplanmaz (pricing.cost_for), cost_usd_billed
 # her zaman 0.0 ve cost_basis free_tier_list_equivalent olur. Fiyat tablosuna
 # yanlislikla billed=True yazilsa bile bu liste onu gecersiz kilar.
-FREE_ONLY_PROVIDERS: set[str] = {"Gemini", "Groq"}
+FREE_ONLY_PROVIDERS: set[str] = {"Groq"}
 
 assert not (PAID_PROVIDERS & FREE_ONLY_PROVIDERS), (
     "Bir saglayici hem ucretli hem yalnizca-ucretsiz olamaz: "

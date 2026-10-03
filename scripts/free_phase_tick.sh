@@ -21,7 +21,10 @@ STATUS_FILE="$PROGRESS_DIR/status.txt"
 TICK_LOG="$PROGRESS_DIR/tick.log"
 PYTHON="$ROOT/.venv/bin/python"
 
-FREE_GENERATORS="traditional,groq:openai/gpt-oss-120b,groq:openai/gpt-oss-20b,gemini:gemini-2.5-flash,gemini:gemini-3.5-flash-lite"
+# YALNIZCA ucretsiz generator'''lar. Gemini 3 Ekim 2026'''da ucretli tier'''a gecti ve
+# BU LISTEDEN CIKARILDI: zamanlanmis bir is, kimse basinda olmadan her gun para
+# harcamamali. Gemini'''nin kalan isi elle, tek seferde kosuluyor.
+FREE_GENERATORS="traditional,groq:openai/gpt-oss-120b,groq:openai/gpt-oss-20b"
 ENDPOINTS="GET /get,POST /post,PUT /put,PATCH /patch,DELETE /delete"
 
 mkdir -p "$PROGRESS_DIR"
