@@ -207,21 +207,29 @@ class CallLedger:
         prompt_chars: int = 0,
         provider_label: str = "",
         limiter_meta: dict | None = None,
+        model: str = "",
+        max_output_tokens: int = 0,
     ) -> str:
         """Yanit alinamayan cagriyi (429, kota, timeout, ag) deftere yazar.
+
+        model / max_output_tokens: generator'in ISTEDIGI model ve cikti tavani.
+        Basarisiz cagride call_meta cogu zaman None'dir (istek yanit donmeden
+        patladi); bu iki deger olmadan guard tahmini None kalir ve butce
+        sigortasi bu cagriyi hic gormez (Bulgu 4 yan etkisi).
 
         Doner: hata sinifi (cagiran taraf fallback nedenini belirlemek icin kullanir).
         """
         error_class = classify_error(exc) if isinstance(exc, Exception) else "UNKNOWN_ERROR"
         if not self.enabled:
             return error_class
+        model_requested = (call_meta or {}).get("model_requested") or model or None
+        output_ceiling = (
+            pricing.max_output_tokens_from_sampling((call_meta or {}).get("sampling"))
+            or max(0, int(max_output_tokens or 0))
+        )
         # Yanit gelmemis olsa bile saglayici istegi isleyip faturalamis OLABILIR.
         # Sifir varsaymak butceyi kor eder; ust tahmin ayri alanda tutulur.
-        failed_guard = pricing.guard_estimate(
-            (call_meta or {}).get("model_requested") or "",
-            prompt_chars,
-            pricing.max_output_tokens_from_sampling((call_meta or {}).get("sampling")),
-        )
+        failed_guard = pricing.guard_estimate(model_requested or "", prompt_chars, output_ceiling)
         with self._spend_lock:
             self._unpriced_calls += 1
             self._spend_guard_estimate += failed_guard or 0.0
@@ -237,7 +245,7 @@ class CallLedger:
             "repeat_index": repeat_index,
             "call_type": call_type,
             "latency_ms": latency_ms,
-            "model_requested": (call_meta or {}).get("model_requested"),
+            "model_requested": model_requested,
             "model_returned": (call_meta or {}).get("model_returned"),
             "sampling": _clean((call_meta or {}).get("sampling") or {}),
             **TokenUsage().to_dict(),

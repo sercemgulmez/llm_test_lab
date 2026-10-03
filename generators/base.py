@@ -896,6 +896,11 @@ class BaseGenerator(ABC):
                         prompt_chars=len(prompt),
                         provider_label=getattr(self, "_provider_label", ""),
                         limiter_meta=call_meta_extra,
+                        # _last_call_meta yukarida sifirlandi; istek patlayinca
+                        # dolmaz. Model ve tavan generator'dan gelmeli, yoksa
+                        # guard tahmini None olur ve butce bu cagriyi gormez.
+                        model=getattr(self, "model", ""),
+                        max_output_tokens=self._max_tokens_for(num_cases),
                     )
                 if failure_origin(error_class) == "altyapi":
                     had_infrastructure_failure = True
