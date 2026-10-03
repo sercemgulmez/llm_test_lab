@@ -208,6 +208,8 @@ def build_llm_prompt(op: ApiOperation, num_cases: int, variant_name: str, varian
         f"- expected.status ve expected.allowed_statuses yalnizca operation response status kodlarindan secilsin.\n"
         f"- expected.assertions listesi en az bir status_code assertion'i icersin.\n"
         f"- Desteklenen assertion type degerleri yalnizca status_code, json_path_exists, json_path_equals, response_contains ve content_type_contains olsun.\n"
+        f"- Assertion JSON alan adlari runner sozlesmesine tam uymali; yol alani 'path' olmali, 'json_path' kullanma.\n"
+        f'- Assertion ornekleri: {{"type": "status_code", "expected": 200}}; {{"type": "json_path_exists", "path": "$.data"}}; {{"type": "json_path_equals", "path": "$.data.id", "expected": 123}}; {{"type": "response_contains", "expected": "success"}}; {{"type": "content_type_contains", "expected": "application/json"}}.\n'
         f"- response_schema_check yalnizca operasyon kontratinda response_schemas dolu ve beklenen status 2xx ise true olsun; aksi halde false olsun. Bu assertion degil, expected icinde boolean alandir.\n"
         f"- tc_id formatini {op.op_id}_TCn olarak kullan.\n\n"
         f"JSON format ornegi:\n{example_array}"
@@ -409,7 +411,15 @@ def normalize_generated_case(case: dict, op: ApiOperation, generator_name: str) 
 
     if not isinstance(expected.get("assertions"), list):
         expected["assertions"] = []
-    expected["response_schema_check"] = bool(expected.get("response_schema_check", False))
+    json_path_aliased = 0
+    for assertion in expected["assertions"]:
+        if isinstance(assertion, dict) and "json_path" in assertion and "path" not in assertion:
+            assertion["path"] = assertion.pop("json_path")
+            json_path_aliased += 1
+    expected["response_schema_check"] = bool(
+        expected.get("response_schema_check", False)
+        and op.response_schemas.get(str(expected_status), {}).get("content")
+    )
 
     test_type = str(case.get("test_type") or _infer_test_type(expected_status, str(case.get("title") or ""))).strip() or "positive"
 
@@ -432,6 +442,7 @@ def normalize_generated_case(case: dict, op: ApiOperation, generator_name: str) 
     row = tc.to_dict()
     row["_request_was_dict"] = request_was_dict
     row["_expected_was_dict"] = expected_was_dict
+    row["_json_path_aliased"] = json_path_aliased
     return row
 
 
@@ -847,6 +858,7 @@ class BaseGenerator(ABC):
         invalid_case_count = 0
         discarded_total = 0   # gecersiz JSON yuzunden atilan case (Bulgu 1)
         validation_error_summary: dict[str, int] = {}
+        json_path_aliased = 0
 
         ledger = getattr(self, "_call_ledger", None)
         retry_index = getattr(self, "_retry_index", 1)
@@ -941,6 +953,7 @@ class BaseGenerator(ABC):
             # deftere tasinmamali.
             reset_salvage_stats()
             parsed_rows = parse_llm_json_to_rows(text, op, generator_name)
+            json_path_aliased += sum(int(row.get("_json_path_aliased") or 0) for row in parsed_rows)
             salvage = last_salvage_stats()
             call_meta_extra["salvaged_cases"] = salvage["recovered"]
             call_meta_extra["discarded_cases"] = salvage["discarded"]
@@ -1060,6 +1073,7 @@ class BaseGenerator(ABC):
                 "discarded_cases": discarded_total,
                 "repaired_cases": repair_added,
                 "fallback_cases": len(fallback_rows),
+                "json_path_aliased": json_path_aliased,
                 "fallback_origin": (
                     ("altyapi" if had_infrastructure_failure else "icerik") if fallback_rows else None
                 ),
@@ -1303,6 +1317,7 @@ class BaseGenerator(ABC):
                 "discarded_cases": 0,
                 "repaired_cases": 0,
                 "fallback_cases": len(rows),
+                "json_path_aliased": 0,
                 "fallback_origin": origin if rows else None,
                 "all_attempts_failed": True,
                 "error_class": error_class,

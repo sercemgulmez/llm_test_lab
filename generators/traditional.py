@@ -66,7 +66,9 @@ class TraditionalGenerator(BaseGenerator):
                 result="Gecerli istek kontrata uygun sekilde basarili olur.",
                 test_type="positive",
                 priority="P0",
-                response_schema_check=bool(op.response_schemas),
+                response_schema_check=bool(
+                    op.response_schemas.get(str(positive_status), {}).get("content")
+                ),
             )
         )
 
@@ -481,7 +483,10 @@ class TraditionalGenerator(BaseGenerator):
                             result=result,
                             test_type="boundary",
                             priority="P1",
-                            response_schema_check=200 <= status < 300 and bool(op.response_schemas),
+                    response_schema_check=bool(
+                        200 <= status < 300
+                        and op.response_schemas.get(str(status), {}).get("content")
+                    ),
                         )
 
         for param in op.parameters:
@@ -502,7 +507,10 @@ class TraditionalGenerator(BaseGenerator):
                     result=result,
                     test_type="boundary",
                     priority="P1",
-                    response_schema_check=200 <= status < 300 and bool(op.response_schemas),
+                            response_schema_check=bool(
+                                200 <= status < 300
+                                and op.response_schemas.get(str(status), {}).get("content")
+                            ),
                 )
 
         return self._build_case(
@@ -513,7 +521,10 @@ class TraditionalGenerator(BaseGenerator):
             result=result,
             test_type="boundary",
             priority="P2",
-            response_schema_check=200 <= status < 300 and bool(op.response_schemas),
+            response_schema_check=bool(
+                200 <= status < 300
+                and op.response_schemas.get(str(status), {}).get("content")
+            ),
         )
 
     def _missing_required_query_case(self, op: ApiOperation, base_request: dict) -> Optional[dict]:
@@ -646,7 +657,10 @@ class TraditionalGenerator(BaseGenerator):
                     result="Kontrat bazli ek baseline senaryosu.",
                     test_type=_infer_test_type(status, ""),
                     priority="P2",
-                    response_schema_check=200 <= status < 300 and bool(op.response_schemas),
+                    response_schema_check=bool(
+                        200 <= status < 300
+                        and op.response_schemas.get(str(status), {}).get("content")
+                    ),
                 )
             )
         return cases
