@@ -1241,7 +1241,77 @@ class BaseGenerator(ABC):
                     time.sleep(wait)
                 else:
                     _logger.error("  [HATA] %s tum denemeler basarisiz: %s", op.op_id, safe_exc)
+                    return self._fallback_for_failed_operation(op, variant_name, num_cases, exc)
         return []
+
+    def _fallback_for_failed_operation(
+        self,
+        op: ApiOperation,
+        variant_name: str,
+        num_cases: int,
+        exc: BaseException,
+    ) -> list[dict]:
+        """Ana cagri TUM denemelerde basarisiz oldu: operasyon fallback'e duser.
+
+        Eskiden burada [] donuyordu: operasyon 0 satir uretiyor, fallback'e
+        ugramiyor ve gorev eksik satirla "tamamlandi" sayiliyordu. Olculdu
+        (3 Ekim, gemini-2.5-flash edge_focused): EP1/EP3/EP5 free tier 429'u
+        aldi, gorev 30/75 satirla kapandi; kayip 45 satir fallback payinda
+        bile gorunmedi. Generator'in IPTAL edildigi durumlar (eksik anahtar,
+        yeniden denenemez hata, gunluk kota, butce) buraya gelmez.
+        """
+        if num_cases <= 0:
+            return []
+        error_class = classify_error(exc) if isinstance(exc, Exception) else "UNKNOWN_ERROR"
+        origin = failure_origin(error_class)
+        generator_name = (
+            f"LLM-{getattr(self, '_provider_label', type(self).__name__)}-{getattr(self, 'model', '')}"
+        )
+        rows = self._build_fallback_cases(
+            op=op, generator_name=generator_name, missing_count=num_cases, existing_rows=[],
+        )
+        for row in rows:
+            row["prompt_variant"] = variant_name
+
+        ledger = getattr(self, "_call_ledger", None)
+        if ledger is not None and rows:
+            ledger.record_fallback(
+                generator=generator_name,
+                variant=variant_name,
+                operation_id=op.op_id,
+                method=op.method,
+                path=op.path,
+                cases=rows,
+                reason=f"Ana cagri tum denemelerde basarisiz oldu ({error_class})",
+                origin=origin,
+            )
+        if getattr(self, "_generation_summaries", None) is None:
+            self._generation_summaries = []
+        self._generation_summaries.append(
+            {
+                "generator": generator_name,
+                "operation_id": op.op_id,
+                "method": op.method,
+                "path": op.path,
+                "requested_cases": num_cases,
+                "parsed_cases": 0,
+                "generated_cases": len(rows),
+                "valid_cases": len(rows),
+                "invalid_cases": 0,
+                "discarded_cases": 0,
+                "repaired_cases": 0,
+                "fallback_cases": len(rows),
+                "fallback_origin": origin if rows else None,
+                "all_attempts_failed": True,
+                "error_class": error_class,
+                "validation_error_summary": {},
+            }
+        )
+        _logger.warning(
+            "  [%s] %s ana cagri tum denemelerde basarisiz (%s) — %d satir fallback ile uretildi (koken: %s).",
+            generator_name, op.op_id, error_class, len(rows), origin,
+        )
+        return rows
 
     @abstractmethod
     def _generate_for_operation(
