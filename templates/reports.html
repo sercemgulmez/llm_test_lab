@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LLM Test Lab – Raporlar</title>
+  <style>
+    :root {
+      --bg: #0d1117; --surface: #161b22; --border: #30363d; --text: #e6edf3;
+      --muted: #8b949e; --blue: #58a6ff; --green: #3fb950; --red: #f85149; --yellow: #d29922;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    header { display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--surface); }
+    header h1 { font-size: 1.1rem; margin: 0; }
+    header a { color: var(--blue); text-decoration: none; }
+    main { padding: 16px 20px; max-width: 1600px; }
+    section { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-bottom: 16px; overflow-x: auto; }
+    h2 { font-size: 1rem; margin: 0 0 10px; }
+    table { border-collapse: collapse; width: 100%; font-size: 0.82rem; }
+    th, td { border-bottom: 1px solid var(--border); padding: 5px 8px; text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+    td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    a { color: var(--blue); }
+    tr.current td { background: #1f2a37; }
+    .warn { color: var(--yellow); font-weight: 600; }
+    .bad { color: var(--red); font-weight: 600; }
+    .ok { color: var(--green); }
+    .note { color: var(--muted); font-size: 0.82rem; margin: 4px 0; }
+    .meta span { margin-right: 18px; }
+    .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+    select { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 4px 6px; }
+    details summary { cursor: pointer; color: var(--muted); }
+    pre { white-space: pre-wrap; word-break: break-word; max-width: 720px; margin: 6px 0 0; font-size: 0.78rem; }
+    .pass-True { color: var(--green); } .pass-False { color: var(--red); }
+  </style>
+</head>
+<body>
+<header>
+  <h1>🧪 LLM Test Lab – Raporlar</h1>
+  <a href="/">← Ana sayfa</a>
+  <span class="note">Salt okunur. Koşular terminalden <code>scripts/run_all.sh</code> ile başlatılır.</span>
+</header>
+<main>
+  <section>
+    <h2>Notlar</h2>
+    <p class="note">{{ pass_rate_note }}</p>
+    <p class="note">{{ tokens_note }}</p>
+  </section>
+
+  <section>
+    <h2>Run klasörleri (outputs/)</h2>
+    {% if runs %}
+    <table>
+      <thead><tr><th>Klasör</th><th>Tarih (CSV)</th><th>Commit</th><th>Ağaç</th><th>Satır</th><th>Pass oranı</th></tr></thead>
+      <tbody>
+      {% for r in runs %}
+        <tr class="{{ 'current' if selected and selected.name == r.name else '' }}">
+          <td><a href="/reports?run={{ r.name | urlencode }}">{{ r.name }}</a></td>
+          <td>{{ r.date }}</td>
+          <td>{{ r.commit }}</td>
+          <td class="{{ 'ok' if r.tree == 'TEMIZ' else ('bad' if r.tree == 'KIRLI' else '') }}">{{ r.tree }}</td>
+          <td class="num">{{ r.rows }}</td>
+          <td class="num">{{ '%.1f%%' % (r.rate * 100) if r.rate is not none else 'yok' }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="note">outputs/ altında executed_testcases CSV içeren klasör yok.</p>
+    {% endif %}
+  </section>
+
+  {% if comparison_runs | length > 1 %}
+  <section>
+    <h2>run_N karşılaştırması (pass oranı)</h2>
+    <table>
+      <thead><tr><th>Generator</th>{% for name in comparison_runs %}<th>{{ name }}</th>{% endfor %}</tr></thead>
+      <tbody>
+      {% for item in comparison %}
+        <tr>
+          <td>{{ item.generator }}</td>
+          {% for name in comparison_runs %}
+            {% set c = item.runs.get(name) %}
+            <td class="num">{% if c and c.rate is not none %}{{ '%.1f%%' % (c.rate * 100) }} ({{ c.passed }}/{{ c.rows }}){% else %}yok{% endif %}</td>
+          {% endfor %}
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+
+  {% if selected %}
+  <section>
+    <h2>Seçili run: {{ selected.name }}</h2>
+    <div class="meta">
+      <span>CSV: {{ selected.csv_name }}{% if selected.csv_count > 1 %} <span class="warn">(klasörde {{ selected.csv_count }} CSV, en yenisi gösteriliyor)</span>{% endif %}</span>
+      <span>Tarih: {{ selected.date }}</span>
+      <span>run_id: {{ selected.run_id }}</span>
+      <span>Commit: {{ selected.commit }} ({{ selected.branch }})</span>
+      <span class="{{ 'ok' if selected.tree == 'TEMIZ' else ('bad' if selected.tree == 'KIRLI' else '') }}">Ağaç: {{ selected.tree }}</span>
+    </div>
+    {% if selected.dirty_paths %}<p class="bad">Kirli yollar: {{ selected.dirty_paths | join(', ') }}</p>{% endif %}
+    <p class="meta">
+      <span>Toplam satır: {{ selected.totals.rows }}</span>
+      <span>Pass: {{ selected.totals.passed }}</span>
+      <span>Fail: {{ selected.totals.failed }}</span>
+      <span>Boş: {{ selected.totals.empty }}</span>
+      <span>Pass oranı: {{ '%.1f%%' % (selected.totals.rate * 100) if selected.totals.rate is not none else 'yok' }}</span>
+    </p>
+    <p>
+      <a href="/reports/download/{{ selected.name | urlencode }}/executed">📥 executed_testcases CSV indir</a>
+      {% if all_results_available %} · <a href="/reports/download/{{ selected.name | urlencode }}/all_results">📦 outputs/final/all_results.csv indir</a>{% endif %}
+    </p>
+  </section>
+
+  <section>
+    <h2>Generator özeti</h2>
+    <table>
+      <thead><tr>
+        <th>Generator</th><th>Satır</th><th>Pass</th><th>Pass oranı</th><th>FAIL status/json_path/diğer</th>
+        <th>Tekrar oranı</th><th>Fallback</th><th>Çağrı ana/repair</th><th>Input token</th><th>Output token</th><th>cost_usd (billed)</th>
+      </tr></thead>
+      <tbody>
+      {% for g in selected.summary %}
+        <tr>
+          <td>{{ g.generator }}</td>
+          <td class="num {{ 'warn' if g.warn_rows else '' }}">{{ g.rows }}{% if g.warn_rows %} (beklenen {{ expected_per_generator }}){% endif %}</td>
+          <td class="num">{{ g.passed }}</td>
+          <td class="num">{{ '%.1f%%' % (g.rate * 100) if g.rate is not none else 'yok' }}</td>
+          <td class="num">{% if g.breakdown %}{{ g.breakdown.status }}/{{ g.breakdown.json_path }}/{{ g.breakdown.other }}{% if g.breakdown.source != 'execution' %} ({{ g.breakdown.source }}){% endif %}{% else %}-{% endif %}</td>
+          <td class="num">{% if g.repetition_rate is not none %}{{ '%.1f%%' % (g.repetition_rate * 100) }} ({{ g.repeated_rows }}/{{ g.rows }}){% else %}yok{% endif %}</td>
+          <td class="num {{ 'bad' if g.warn_fallback else '' }}">{{ g.fallback if g.fallback is not none else 'yok' }}</td>
+          {% if g.ledger %}
+            <td class="num">{{ g.ledger.ana }}/{{ g.ledger.repair }}{% if g.ledger.failed %} <span class="warn">({{ g.ledger.failed }} failed)</span>{% endif %}</td>
+            <td class="num">{{ g.ledger.input_tokens }}</td>
+            <td class="num">{{ g.ledger.output_tokens }}</td>
+          {% else %}
+            <td class="num">{{ '-' if g.provider == 'Traditional' else 'yok' }}</td><td class="num">{{ '-' if g.provider == 'Traditional' else 'yok' }}</td><td class="num">{{ '-' if g.provider == 'Traditional' else 'yok' }}</td>
+          {% endif %}
+          <td class="num">
+            {% if g.cost_status == 'doğrulanmadı' %}<span class="bad">doğrulanmadı</span>
+            {% elif g.ledger %}{{ '%.4f' % g.ledger.cost_usd_billed }}{% if g.cost_status == 'ücretsiz' %} <span class="note">(ücretsiz)</span>{% endif %}
+            {% elif g.provider == 'Traditional' %}-
+            {% else %}yok{% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% if not selected.has_tasks %}<p class="note">tasks.jsonl yok: fallback "yok" gösteriliyor.</p>{% endif %}
+    {% if not selected.has_ledger %}<p class="note">Çağrı defteri (calls.jsonl) yok: çağrı/token/maliyet "yok" gösteriliyor.</p>{% endif %}
+  </section>
+
+  <section>
+    <h2>Generator × operasyon pass tablosu</h2>
+    <table>
+      <thead><tr><th>Generator</th>{% for op in selected.ops %}<th>{{ op }}<br><span class="note">{{ selected.op_paths.get(op, '') }}</span></th>{% endfor %}</tr></thead>
+      <tbody>
+      {% for gen, per_op in selected.matrix | dictsort %}
+        <tr>
+          <td>{{ gen }}</td>
+          {% for op in selected.ops %}
+            {% set c = per_op.get(op) %}
+            <td class="num">{% if c and c.rows %}{{ c.passed }}/{{ c.rows }}{% else %}0{% endif %}</td>
+          {% endfor %}
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>/status/{code} expected–actual uyuşmazlıkları ({{ selected.status_mismatches | length }})</h2>
+    {% if selected.status_mismatches %}
+    <table>
+      <thead><tr><th>Generator</th><th>Variant</th><th>tc_id</th><th>Başlık</th><th>URL</th><th>Expected</th><th>Actual</th><th>Pass</th></tr></thead>
+      <tbody>
+      {% for r in selected.status_mismatches %}
+        <tr>
+          <td>{{ r.generator }}</td><td>{{ r.prompt_variant }}</td><td>{{ r.tc_id }}</td><td>{{ r.title }}</td>
+          <td>{{ r.url }}</td><td class="num">{{ r.expected_status }}</td><td class="num">{{ r.actual_status }}</td>
+          <td class="pass-{{ r.get('pass', '') }}">{{ r.get('pass', '') }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<p class="note">Uyuşmazlık yok.</p>{% endif %}
+  </section>
+
+  <section>
+    <h2>Satırlar (<span id="visible-count">{{ selected.rows | length }}</span>/{{ selected.rows | length }})</h2>
+    <div class="filters">
+      <select id="f-gen" data-key="gen"><option value="">Tüm generator'lar</option>{% for g in selected.generators %}<option value="{{ g }}">{{ g }}</option>{% endfor %}</select>
+      <select id="f-op" data-key="op"><option value="">Tüm operasyonlar</option>{% for op in selected.ops %}<option value="{{ op }}">{{ op }} {{ selected.op_paths.get(op, '') }}</option>{% endfor %}</select>
+      <select id="f-variant" data-key="variant"><option value="">Tüm variant'lar</option>{% for v in selected.variants %}<option value="{{ v }}">{{ v }}</option>{% endfor %}</select>
+      <select id="f-pass" data-key="pass"><option value="">Pass: hepsi</option><option value="True">True</option><option value="False">False</option><option value="">—</option></select>
+    </div>
+    <table id="rows-table">
+      <thead><tr><th>Generator</th><th>Op</th><th>Variant</th><th>tc_id</th><th>Başlık</th><th>request_body</th><th>Exp</th><th>Act</th><th>Pass</th><th>actual_body</th></tr></thead>
+      <tbody>
+      {% for r in selected.rows %}
+        <tr data-gen="{{ r.generator }}" data-op="{{ r.operation_id }}" data-variant="{{ r.prompt_variant }}" data-pass="{{ r.get('pass', '') }}">
+          <td>{{ r.generator }}</td><td>{{ r.operation_id }}</td><td>{{ r.prompt_variant }}</td><td>{{ r.tc_id }}</td><td>{{ r.title }}</td>
+          <td>{% set rb = r.get('request_body') or '' %}{% if rb | length > 80 %}<details><summary>{{ rb[:80] }}…</summary><pre>{{ rb }}</pre></details>{% else %}{{ rb }}{% endif %}</td>
+          <td class="num">{{ r.expected_status }}</td><td class="num">{{ r.actual_status }}</td>
+          <td class="pass-{{ r.get('pass', '') }}">{{ r.get('pass', '') }}</td>
+          <td>{% set ab = r.get('actual_body') or '' %}{% if ab | length > 120 %}<details><summary>{{ ab[:120] }}…</summary><pre>{{ ab }}</pre></details>{% elif ab %}<pre>{{ ab }}</pre>{% else %}<span class="note">yok</span>{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+</main>
+<script>
+  // Yalnizca dataset karsilastirir ve satiri gizler/gosterir; HTML uretmez.
+  (function () {
+    const selects = Array.from(document.querySelectorAll(".filters select"));
+    const rows = Array.from(document.querySelectorAll("#rows-table tbody tr"));
+    const counter = document.getElementById("visible-count");
+    function apply() {
+      let visible = 0;
+      for (const row of rows) {
+        const show = selects.every(s => s.selectedIndex === 0 || row.dataset[s.dataset.key] === s.value);
+        row.style.display = show ? "" : "none";
+        if (show) visible += 1;
+      }
+      if (counter) counter.textContent = String(visible);
+    }
+    selects.forEach(s => s.addEventListener("change", apply));
+  })();
+</script>
+</body>
+</html>

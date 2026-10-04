@@ -48,6 +48,7 @@ from reporters.csv_reporter import (  # noqa: E402
     save_results_csv,
 )
 from runner import run_testcases  # noqa: E402
+import report_views  # noqa: E402
 
 _logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -877,6 +878,30 @@ def download_report(job_id: str):
         as_attachment=True,
         download_name=f"llm_test_lab_report_{job_id}.zip",
     )
+
+
+# ── Salt okunur raporlar (CLI run klasorleri) ────────────────────────────────
+
+@app.route("/reports")
+def reports():
+    """outputs/* altindaki kosu klasorlerini SALT OKUNUR gosterir; kosu baslatmaz."""
+    run_name = request.args.get("run")
+    if run_name is None:
+        selected = report_views.default_run_dir()
+    else:
+        selected = report_views.resolve_run_dir(run_name)
+        if selected is None:
+            return _json_response("Run klasoru bulunamadi.", 404)
+    return render_template("reports.html", **report_views.build_reports_context(selected))
+
+
+@app.route("/reports/download/<run_name>/<kind>")
+def reports_download(run_name: str, kind: str):
+    """Yalnizca iki sabit kalip: secili run'in executed CSV'si ve outputs/final/all_results.csv."""
+    path = report_views.download_path(run_name, kind)
+    if path is None:
+        return _json_response("Dosya bulunamadi.", 404)
+    return send_file(path, as_attachment=True, download_name=path.name, mimetype="text/csv")
 
 
 if __name__ == "__main__":
