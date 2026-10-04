@@ -193,15 +193,34 @@ def _coerce_status(value: Any) -> Optional[int]:
     return None
 
 
+_JSON_PATH_INDEX_RE = re.compile(r"\[(\d+)\]")
+_JSON_PATH_PART_RE = re.compile(r"^([^\[\]]*)((?:\[\d+\])*)$")
+
+
 def _json_path_lookup(document: Any, path: str) -> tuple[bool, Any]:
-    if not path.startswith("$."):
+    if path == "$":
+        return document is not None, document
+    if path.startswith("$."):
+        rest = path[2:]
+    elif path.startswith("$["):
+        rest = path[1:]
+    else:
         return False, None
     current = document
-    for part in path[2:].split("."):
-        if isinstance(current, dict) and part in current:
-            current = current[part]
-            continue
-        return False, None
+    for part in rest.split("."):
+        match = _JSON_PATH_PART_RE.match(part)
+        if match is None or (not match.group(1) and not match.group(2)):
+            return False, None
+        key = match.group(1)
+        if key:
+            if not (isinstance(current, dict) and key in current):
+                return False, None
+            current = current[key]
+        for index in _JSON_PATH_INDEX_RE.findall(match.group(2)):
+            position = int(index)
+            if not (isinstance(current, list) and position < len(current)):
+                return False, None
+            current = current[position]
     return True, current
 
 
