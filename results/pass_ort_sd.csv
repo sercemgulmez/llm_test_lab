@@ -1,0 +1,10 @@
+generator,ort,sd,min,max,n_run
+LLM-Claude-claude-haiku-4-5,78.5,5.9,72.9,85.7,5
+LLM-Claude-claude-sonnet-4-5,93.5,3.8,88.0,97.9,5
+LLM-Gemini-gemini-2.5-flash,68.8,4.9,62.0,73.5,5
+LLM-Gemini-gemini-3.5-flash-lite,84.5,3.8,80.0,90.0,5
+LLM-Groq-openai/gpt-oss-120b,72.3,9.4,58.0,84.0,5
+LLM-Groq-openai/gpt-oss-20b,73.2,4.4,66.0,77.8,5
+LLM-OpenAI-gpt-4.1,76.9,3.7,72.9,81.6,5
+LLM-OpenAI-gpt-4o-mini,48.0,5.5,40.0,54.0,5
+Traditional-Template,90.0,0.0,90.0,90.0,5
