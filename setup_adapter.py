@@ -13,9 +13,10 @@ MODELS = [
     {"id": "traditional-generator", "name": "Traditional"},
 ]
 
-TOTAL_EXPERIMENT_SAMPLES = 1350
+TOTAL_EXPERIMENT_SAMPLES: int = 1350
 
-def get_experiment_config():
+
+def get_experiment_config() -> dict[str, int | float]:
     return {
         "total_samples": TOTAL_EXPERIMENT_SAMPLES,
         "producers": len(MODELS),
