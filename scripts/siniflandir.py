@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-import csv, glob, json, os, re
+import csv
+import glob
+import json
+import os
+import re
 from collections import defaultdict
 
 OUT = os.environ.get("LAB_OUT") or os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "outputs"))
